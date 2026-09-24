@@ -40,7 +40,9 @@ GLOBAL_PROFILE = {
         "для покупок учитывать доставку или наличие в Краснодаре"
     ],
     "contacts": {},
-    "telegram_contacts": TELEGRAM_CONTACTS
+    "telegram_contacts": TELEGRAM_CONTACTS,
+    "notes": [],
+    "tasks": []
 }
 
 
@@ -57,6 +59,7 @@ MODES = {
         "max_tokens": 500,
         "temperature": 0.7
     },
+
     "кратко": {
         "title": "Краткий режим",
         "prompt": """
@@ -66,6 +69,7 @@ MODES = {
         "max_tokens": 220,
         "temperature": 0.5
     },
+
     "джарвис": {
         "title": "Режим Джарвис",
         "prompt": """
@@ -74,9 +78,10 @@ MODES = {
 Отвечай по-русски.
 Если пользователь просит сделать действие — помогай выполнить его через доступные инструменты.
 """,
-        "max_tokens": 550,
+        "max_tokens": 600,
         "temperature": 0.7
     },
+
     "исследователь": {
         "title": "Режим исследователя",
         "prompt": """
@@ -85,9 +90,10 @@ MODES = {
 Делай выводы, сравнивай источники, выделяй главное.
 Отвечай по-русски.
 """,
-        "max_tokens": 750,
+        "max_tokens": 850,
         "temperature": 0.5
     },
+
     "оператор": {
         "title": "Режим оператора",
         "prompt": """
@@ -96,9 +102,10 @@ MODES = {
 Если задача выполнена, отвечай: сделано, отправила, нашла, подготовила.
 Подробности лучше отправлять в Telegram.
 """,
-        "max_tokens": 250,
+        "max_tokens": 260,
         "temperature": 0.4
     },
+
     "секретарь": {
         "title": "Режим секретаря",
         "prompt": """
@@ -107,9 +114,10 @@ MODES = {
 Пиши аккуратно и структурированно.
 Отвечай по-русски.
 """,
-        "max_tokens": 700,
+        "max_tokens": 800,
         "temperature": 0.6
     },
+
     "покупки": {
         "title": "Режим покупок",
         "prompt": """
@@ -119,9 +127,10 @@ MODES = {
 Не оформляй и не оплачивай заказы самостоятельно.
 Не выдумывай цены и ссылки.
 """,
-        "max_tokens": 750,
+        "max_tokens": 800,
         "temperature": 0.5
     },
+
     "дом": {
         "title": "Режим дом",
         "prompt": """
@@ -129,9 +138,10 @@ MODES = {
 Помогай с рецептами, бытовыми задачами, ремонтом, покупками, списками дел и инструкциями.
 Отвечай просто и практично.
 """,
-        "max_tokens": 650,
+        "max_tokens": 700,
         "temperature": 0.6
     },
+
     "критик": {
         "title": "Режим критика",
         "prompt": """
@@ -140,9 +150,10 @@ MODES = {
 Говори прямо, но не грубо.
 После критики предлагай улучшения.
 """,
-        "max_tokens": 550,
+        "max_tokens": 650,
         "temperature": 0.6
     },
+
     "учитель": {
         "title": "Режим учителя",
         "prompt": """
@@ -150,8 +161,32 @@ MODES = {
 Объясняй простыми словами, с примерами.
 Если тема сложная — разбивай на шаги.
 """,
-        "max_tokens": 650,
+        "max_tokens": 700,
         "temperature": 0.6
+    },
+
+    "совет": {
+        "title": "Режим совет директоров",
+        "prompt": """
+Ты моделируешь совет директоров из нескольких экспертов:
+1. Стратег.
+2. Финансист.
+3. Маркетолог.
+4. Технический эксперт.
+5. Критик рисков.
+
+На сложные вопросы отвечай структурой:
+Стратег: ...
+Финансист: ...
+Маркетолог: ...
+Технический эксперт: ...
+Критик рисков: ...
+Итог: ...
+
+Отвечай по-русски, практично и без лишней воды.
+""",
+        "max_tokens": 900,
+        "temperature": 0.7
     }
 }
 
@@ -277,7 +312,11 @@ def normalize_mode_name(text):
 
         "учитель": "учитель",
         "учителя": "учитель",
-        "преподаватель": "учитель"
+        "преподаватель": "учитель",
+
+        "совет": "совет",
+        "совет директоров": "совет",
+        "директоров": "совет"
     }
 
     return aliases.get(text, text)
@@ -317,19 +356,32 @@ def help_text():
 режим исследователь,
 режим секретарь,
 режим покупки,
-режим дом.
+режим дом,
+режим совет.
 
-Можно сказать:
+Интернет и Telegram:
 найди в интернете ...
 подбери самые дешёвые ...
 скинь в телеграм
 сделай документ
 сделай таблицу
 найди рядом
+
+Заметки:
+сохрани заметку ...
+покажи заметки
+найди в заметках ...
+
+Задачи:
+добавь задачу ...
+покажи задачи
+очисти задачи
+
+Память:
 запомни, что ...
 что ты помнишь
-добавь в список покупок ...
-покажи список покупок
+
+Телефон:
 запомни телефон мамы +79991234567
 позвони маме
 """
@@ -460,11 +512,98 @@ async def send_telegram_file(filename, content, chat_id=None):
 # ПОИСК И ТОВАРЫ
 # ---------------------------------------------------------
 
-def build_shop_queries(query):
-    """
-    Поисковые запросы именно под товары с ценами.
-    """
+def clean_query_for_search(query):
+    text = str(query or "").strip()
 
+    replacements = [
+        "и отправь в телеграм",
+        "отправь в телеграм",
+        "скинь в телеграм",
+        "пришли в телеграм",
+        "и скинь в телеграм",
+        "и отправь на телефон",
+        "скинь на телефон",
+        "отправь на телефон",
+        "найди",
+        "поищи",
+        "посмотри",
+        "подбери",
+        "выбери",
+        "самый дешевый",
+        "самая дешевая",
+        "самые дешевые",
+        "дешевый",
+        "дешевая",
+        "дешевые",
+        "недорогой",
+        "недорогая",
+        "недорогие",
+        "товар"
+    ]
+
+    for r in replacements:
+        pattern = re.compile(re.escape(r), re.IGNORECASE)
+        text = pattern.sub(" ", text)
+
+    text = re.sub(r"\s+", " ", text).strip(" .,!?:;")
+
+    low = normalize_text(text)
+
+    if "логитеч" in low:
+        text = re.sub("логитеч", "Logitech", text, flags=re.IGNORECASE)
+
+    if "краснодар" not in normalize_text(text):
+        if any(w in normalize_text(text) for w in [
+            "шторы", "клавиатура", "мышь", "rtx", "видеокарта",
+            "монитор", "ноутбук", "телефон", "смартфон", "мебель",
+            "стол", "диван", "кровать"
+        ]):
+            text += " Краснодар"
+
+    return text.strip()
+
+
+def extract_search_query(command):
+    text = command.strip()
+
+    remove_phrases = [
+        "найди в интернете",
+        "поищи в интернете",
+        "посмотри в интернете",
+        "найди",
+        "поищи",
+        "посмотри",
+        "подбери",
+        "подобрать",
+        "выбери",
+        "выбрать",
+        "скинь в телеграм",
+        "отправь в телеграм",
+        "пришли в телеграм",
+        "скинь на телефон",
+        "отправь на телефон",
+        "сделай документ",
+        "сделай файл"
+    ]
+
+    low = normalize_text(text)
+
+    for phrase in remove_phrases:
+        if low.startswith(phrase):
+            words = text.split()
+            phrase_len = len(phrase.split())
+            text = " ".join(words[phrase_len:])
+            break
+
+    text = text.strip(" .,!?:;")
+
+    if not text:
+        text = command.strip()
+
+    return clean_query_for_search(text)
+
+
+def build_shop_queries(query):
     base = clean_query_for_search(query)
 
     queries = [
@@ -505,10 +644,6 @@ def build_shop_queries(query):
 
 
 async def web_search(query, max_results=5):
-    """
-    Интернет-поиск через Tavily.
-    """
-
     api_key = TAVILY_API_KEY or os.getenv("TAVILY_API_KEY")
     api_url = TAVILY_API_URL or "https://api.tavily.com/search"
 
@@ -605,11 +740,6 @@ def format_search_results(results):
 
 
 def extract_price_from_text(text):
-    """
-    Пытается найти цену в тексте.
-    Возвращает число в рублях или None.
-    """
-
     if not text:
         return None
 
@@ -657,10 +787,6 @@ def clean_product_title(title):
 
 
 def is_generic_search_url(url):
-    """
-    Обычные ссылки на поиск не считаем товаром.
-    """
-
     if not url:
         return True
 
@@ -688,7 +814,6 @@ def collect_product_candidates(results):
         content = item.get("content", "")
 
         combined_text = f"{title}\n{content}"
-
         price = extract_price_from_text(combined_text)
 
         if price is None:
@@ -784,6 +909,18 @@ def build_messages(state, user_text, internet_context=""):
         for fact in all_facts[-15:]:
             memory_text += f"- {fact}\n"
 
+    notes = GLOBAL_PROFILE.get("notes", [])
+    if notes:
+        memory_text += "\nЗаметки пользователя:\n"
+        for note in notes[-8:]:
+            memory_text += f"- {note.get('text', '')}\n"
+
+    tasks = GLOBAL_PROFILE.get("tasks", [])
+    if tasks:
+        memory_text += "\nТекущие задачи пользователя:\n"
+        for task in tasks[-8:]:
+            memory_text += f"- {task.get('text', '')}\n"
+
     if internet_context:
         memory_text += "\nДанные из интернета и инструментов:\n"
         memory_text += internet_context[:9000]
@@ -796,12 +933,14 @@ def build_messages(state, user_text, internet_context=""):
 - Telegram;
 - файлы;
 - карты;
-- подготовка ссылок для покупки.
+- подготовка ссылок для покупки;
+- заметки пользователя;
+- список задач.
 
 Правила:
 1. Не выдумывай ссылки.
 2. Не выдумывай точные цены.
-3. Если цена не видна — скажи, что цену нужно проверить по ссылке.
+3. Если цена не видна — скажи, что цену нужно проверить.
 4. Не оформляй и не оплачивай заказы самостоятельно.
 5. Для покупок учитывай Краснодар.
 6. Если результат длинный — кратко для голоса, подробно в Telegram.
@@ -1177,102 +1316,8 @@ def shopping_needs_clarification(command):
     return None
 
 
-def clean_query_for_search(query):
-    text = str(query or "").strip()
-
-    replacements = [
-        "и отправь в телеграм",
-        "отправь в телеграм",
-        "скинь в телеграм",
-        "пришли в телеграм",
-        "и скинь в телеграм",
-        "и отправь на телефон",
-        "скинь на телефон",
-        "отправь на телефон",
-        "найди",
-        "поищи",
-        "посмотри",
-        "подбери",
-        "выбери",
-        "самый дешевый",
-        "самая дешевая",
-        "самые дешевые",
-        "дешевый",
-        "дешевая",
-        "дешевые",
-        "недорогой",
-        "недорогая",
-        "недорогие",
-        "товар"
-    ]
-
-    low = normalize_text(text)
-
-    for r in replacements:
-        low_r = normalize_text(r)
-        if low_r in low:
-            pattern = re.compile(re.escape(r), re.IGNORECASE)
-            text = pattern.sub(" ", text)
-
-    text = re.sub(r"\s+", " ", text).strip(" .,!?:;")
-
-    fixed = normalize_text(text)
-
-    if "логитеч" in fixed:
-        text = re.sub("логитеч", "Logitech", text, flags=re.IGNORECASE)
-
-    if "краснодар" not in normalize_text(text):
-        if any(w in normalize_text(text) for w in [
-            "шторы", "клавиатура", "мышь", "rtx", "видеокарта",
-            "монитор", "ноутбук", "телефон", "смартфон", "мебель"
-        ]):
-            text += " Краснодар"
-
-    return text.strip()
-
-
-def extract_search_query(command):
-    text = command.strip()
-
-    remove_phrases = [
-        "найди в интернете",
-        "поищи в интернете",
-        "посмотри в интернете",
-        "найди",
-        "поищи",
-        "посмотри",
-        "подбери",
-        "подобрать",
-        "выбери",
-        "выбрать",
-        "скинь в телеграм",
-        "отправь в телеграм",
-        "пришли в телеграм",
-        "скинь на телефон",
-        "отправь на телефон",
-        "сделай документ",
-        "сделай файл"
-    ]
-
-    low = normalize_text(text)
-
-    for phrase in remove_phrases:
-        if low.startswith(phrase):
-            words = text.split()
-            phrase_len = len(phrase.split())
-            text = " ".join(words[phrase_len:])
-            break
-
-    text = text.strip(" .,!?:;")
-
-    if not text:
-        text = command.strip()
-
-    return clean_query_for_search(text)
-
-
 # ---------------------------------------------------------
-# КАРТЫ, ЗАКАЗЫ, ТЕЛЕФОН
+# КАРТЫ, ТЕЛЕФОН, КОНТАКТЫ
 # ---------------------------------------------------------
 
 def make_map_links(query):
@@ -1282,24 +1327,6 @@ def make_map_links(query):
     google = f"https://www.google.com/maps/search/?api=1&query={encoded}"
 
     return yandex, google
-
-
-def make_order_links(query):
-    encoded = urllib.parse.quote(query)
-
-    links = []
-
-    links.append(("Яндекс Маркет", f"https://market.yandex.ru/search?text={encoded}"))
-    links.append(("Ozon", f"https://www.ozon.ru/search/?text={encoded}"))
-    links.append(("Wildberries", f"https://www.wildberries.ru/catalog/0/search.aspx?search={encoded}"))
-    links.append(("Hoff", f"https://hoff.ru/search/?q={encoded}"))
-    links.append(("Лемана ПРО", f"https://lemanapro.ru/search/?q={encoded}"))
-
-    links.append(("Яндекс Еда", "https://eda.yandex.ru/"))
-    links.append(("Купер", "https://kuper.ru/"))
-    links.append(("Самокат", "https://samokat.ru/"))
-
-    return links
 
 
 def extract_phone_number(text):
@@ -1432,7 +1459,7 @@ async def handle_call_request(command):
 
 
 # ---------------------------------------------------------
-# ПАМЯТЬ И СПИСКИ
+# ПАМЯТЬ, ЗАМЕТКИ, ЗАДАЧИ
 # ---------------------------------------------------------
 
 def extract_fact(command):
@@ -1519,17 +1546,94 @@ def add_to_shopping_list(command, state):
     return items
 
 
+def save_note(command):
+    text = command.strip()
+    low = normalize_text(text)
+
+    prefixes = [
+        "сохрани заметку",
+        "запиши заметку",
+        "заметка",
+        "запиши"
+    ]
+
+    note = text
+
+    for p in prefixes:
+        if low.startswith(p):
+            words = text.split()
+            note = " ".join(words[len(p.split()):])
+            break
+
+    note = note.strip(" .,!?:;")
+
+    if not note:
+        return None
+
+    item = {
+        "text": note,
+        "created_at": time.time()
+    }
+
+    GLOBAL_PROFILE["notes"].append(item)
+    GLOBAL_PROFILE["notes"] = GLOBAL_PROFILE["notes"][-100:]
+
+    return note
+
+
+def search_notes(query):
+    q = normalize_text(query)
+    results = []
+
+    for note in GLOBAL_PROFILE.get("notes", []):
+        text = note.get("text", "")
+        if q in normalize_text(text):
+            results.append(text)
+
+    return results[-10:]
+
+
+def add_task(command):
+    text = command.strip()
+    low = normalize_text(text)
+
+    prefixes = [
+        "добавь задачу",
+        "создай задачу",
+        "задача",
+        "запиши задачу"
+    ]
+
+    task = text
+
+    for p in prefixes:
+        if low.startswith(p):
+            words = text.split()
+            task = " ".join(words[len(p.split()):])
+            break
+
+    task = task.strip(" .,!?:;")
+
+    if not task:
+        return None
+
+    item = {
+        "text": task,
+        "created_at": time.time(),
+        "done": False
+    }
+
+    GLOBAL_PROFILE["tasks"].append(item)
+    GLOBAL_PROFILE["tasks"] = GLOBAL_PROFILE["tasks"][-100:]
+
+    return task
+
+
 # ---------------------------------------------------------
 # ФОНОВЫЙ АГЕНТ
 # ---------------------------------------------------------
 
 async def background_agent_task(command, session_id, state_snapshot):
-    """
-    Долгие задачи выполняем в фоне.
-    Для товаров пытаемся найти конкретные товары с ценами.
-    Обычные поисковые ссылки не выдаём как подборку.
-    """
-
     try:
         state = copy.deepcopy(state_snapshot)
         query = extract_search_query(command)
@@ -1603,14 +1707,13 @@ async def background_agent_task(command, session_id, state_snapshot):
                 f"Я поискала варианты по запросу:\n{query}\n\n"
                 f"Но не смогла достоверно вытащить цены из найденных страниц. "
                 f"Поэтому не буду выдавать обычные ссылки на поиск как будто это подборка.\n\n"
+                f"Это ограничение обычного веб-поиска: маркетплейсы часто скрывают цены или показывают их через приложение.\n\n"
                 f"Что можно сделать:\n"
-                f"1. Уточнить запрос: бренд, модель, размер, цвет или бюджет.\n"
-                f"2. Попросить поискать на конкретной площадке, например Авито Краснодар.\n"
+                f"1. Уточнить модель, размер, цвет или бюджет.\n"
+                f"2. Попросить искать на конкретной площадке: Авито, DNS, Ситилинк, Яндекс Маркет.\n"
                 f"3. Попросить: только новые товары или можно б/у.\n\n"
                 f"Пример:\n"
-                f"найди самую дешёвую клавиатуру Logitech K380 в Краснодаре\n\n"
-                f"Если хотите, я могу следующим запросом отправить просто ссылки на поиск, "
-                f"но подборкой дешёвых товаров я их считать не буду."
+                f"найди самую дешёвую клавиатуру Logitech K380 в Краснодаре\n"
             )
 
             state["last_result"] = no_price_text
@@ -1633,14 +1736,13 @@ async def background_agent_task(command, session_id, state_snapshot):
 
         prompt = (
             f"Задача пользователя: {command}\n\n"
-            f"Подготовь результат для Telegram.\n\n"
+            f"Подготовь полезный результат для Telegram.\n\n"
             f"Правила:\n"
             f"1. Не выдавай обычные ссылки на поиск как готовую подборку.\n"
-            f"2. Если это подбор товара и нет цен — честно скажи, что сравнить по цене не удалось.\n"
-            f"3. Не выдумывай магазины, цены и ссылки.\n"
-            f"4. Учитывай Краснодар и доставку в Краснодар.\n"
-            f"5. Если это заказ еды или товара — не оформляй и не оплачивай заказ сам.\n"
-            f"6. В конце дай короткий практический вывод.\n"
+            f"2. Не выдумывай магазины, цены и ссылки.\n"
+            f"3. Учитывай Краснодар.\n"
+            f"4. Если данных мало — честно скажи.\n"
+            f"5. В конце дай короткий практический вывод.\n"
         )
 
         answer, state = await ask_deepseek(
@@ -1706,6 +1808,8 @@ async def index():
         "telegram_configured": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
         "internet_configured": bool(TAVILY_API_KEY),
         "telegram_contacts": list(GLOBAL_PROFILE.get("telegram_contacts", {}).keys()),
+        "notes_count": len(GLOBAL_PROFILE.get("notes", [])),
+        "tasks_count": len(GLOBAL_PROFILE.get("tasks", [])),
         "memory": "server session memory",
         "active_sessions": len(SERVER_SESSIONS),
         "features": [
@@ -1717,6 +1821,9 @@ async def index():
             "safe order preparation",
             "shopping clarification through voice",
             "cheapest product extraction",
+            "notes",
+            "tasks",
+            "board of directors mode",
             "Krasnodar shopping context",
             "session memory",
             "modes",
@@ -1806,9 +1913,12 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
             return JSONResponse(make_response("Режим оператора включён."))
         if detected_mode == "исследователь":
             return JSONResponse(make_response("Режим исследователя включён."))
+        if detected_mode == "совет":
+            return JSONResponse(make_response("Совет директоров собран."))
 
         return JSONResponse(make_response(f"{title} включён."))
 
+    # Telegram-контакт
     if text.startswith("запомни телеграм") or text.startswith("запомни telegram"):
         result = save_telegram_contact_from_command(command)
 
@@ -1820,6 +1930,7 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response("Не смогла распознать Telegram chat id."))
 
+    # Телефонный контакт
     if text.startswith("запомни телефон") or text.startswith("запомни номер"):
         result = save_contact_from_command(command)
 
@@ -1831,11 +1942,86 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response("Не смогла распознать номер."))
 
+    # Звонок
     if is_phone_call_request(command):
         answer = await handle_call_request(command)
         save_state(session_id, state)
         return JSONResponse(make_response(answer))
 
+    # Заметки
+    if text.startswith("сохрани заметку") or text.startswith("запиши заметку") or text.startswith("заметка "):
+        note = save_note(command)
+
+        if note:
+            save_state(session_id, state)
+            return JSONResponse(make_response("Заметку сохранила."))
+
+        save_state(session_id, state)
+        return JSONResponse(make_response("Что записать в заметку?"))
+
+    if text in ["покажи заметки", "мои заметки", "список заметок"]:
+        notes = GLOBAL_PROFILE.get("notes", [])
+
+        if not notes:
+            save_state(session_id, state)
+            return JSONResponse(make_response("Заметок пока нет."))
+
+        msg = "📝 Заметки:\n\n"
+        for i, note in enumerate(notes[-10:], start=1):
+            msg += f"{i}. {note.get('text', '')}\n"
+
+        await send_telegram_message(msg)
+        save_state(session_id, state)
+        return JSONResponse(make_response("Отправила заметки в Телеграм."))
+
+    if text.startswith("найди в заметках"):
+        query = command.split(" ", 3)[-1] if len(command.split()) > 3 else ""
+        results = search_notes(query)
+
+        if not results:
+            save_state(session_id, state)
+            return JSONResponse(make_response("В заметках ничего не нашла."))
+
+        msg = "🔎 Нашла в заметках:\n\n"
+        for i, item in enumerate(results, start=1):
+            msg += f"{i}. {item}\n"
+
+        await send_telegram_message(msg)
+        save_state(session_id, state)
+        return JSONResponse(make_response("Нашла и отправила в Телеграм."))
+
+    # Задачи
+    if text.startswith("добавь задачу") or text.startswith("создай задачу") or text.startswith("задача "):
+        task = add_task(command)
+
+        if task:
+            save_state(session_id, state)
+            return JSONResponse(make_response("Задачу добавила."))
+
+        save_state(session_id, state)
+        return JSONResponse(make_response("Какую задачу добавить?"))
+
+    if text in ["покажи задачи", "мои задачи", "список задач"]:
+        tasks = GLOBAL_PROFILE.get("tasks", [])
+
+        if not tasks:
+            save_state(session_id, state)
+            return JSONResponse(make_response("Задач пока нет."))
+
+        msg = "✅ Задачи:\n\n"
+        for i, task in enumerate(tasks[-15:], start=1):
+            msg += f"{i}. {task.get('text', '')}\n"
+
+        await send_telegram_message(msg)
+        save_state(session_id, state)
+        return JSONResponse(make_response("Отправила задачи в Телеграм."))
+
+    if text in ["очисти задачи", "удали задачи", "очисти список задач"]:
+        GLOBAL_PROFILE["tasks"] = []
+        save_state(session_id, state)
+        return JSONResponse(make_response("Задачи очищены."))
+
+    # Запомнить факт
     if text.startswith("запомни"):
         fact = extract_fact(command)
 
@@ -1894,8 +2080,9 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         state["pending_task"] = None
 
         save_state(session_id, state)
-        return JSONResponse(make_response("Память очищена."))
+        return JSONResponse(make_response("Память текущего диалога очищена."))
 
+    # Список покупок
     added_items = add_to_shopping_list(command, state)
 
     if added_items:
@@ -1939,6 +2126,7 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         else:
             return JSONResponse(make_response("Не получилось отправить в Телеграм."))
 
+    # Скинуть последнее
     if text in [
         "скинь на телефон",
         "отправь в телеграм",
@@ -1963,6 +2151,7 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         else:
             return JSONResponse(make_response("Телеграм не настроен или не ответил."))
 
+    # Уточнение для покупок
     clarification = shopping_needs_clarification(command)
 
     if clarification:
@@ -1974,6 +2163,7 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response(clarification))
 
+    # Фоновые задачи: товары, Telegram, файлы
     if wants_telegram(command) or wants_file(command) or is_order_request(command):
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
             save_state(session_id, state)
@@ -1998,6 +2188,7 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         return JSONResponse(make_response("Сделаю и отправлю в Телеграм."))
 
+    # Интернет без Telegram
     if needs_web(command):
         query = extract_search_query(command)
         internet_context = ""
@@ -2034,6 +2225,7 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         return JSONResponse(make_response(answer))
 
+    # Обычный DeepSeek
     try:
         answer, state = await ask_deepseek(command, state)
         state["last_result"] = answer
