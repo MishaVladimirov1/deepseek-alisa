@@ -529,6 +529,82 @@ def build_shop_queries(query):
         ])
 
     return queries
+    async def web_search(query, max_results=5):
+    """
+    Интернет-поиск через Tavily.
+    Возвращает список результатов: title, url, content.
+    """
+
+    api_key = TAVILY_API_KEY or os.getenv("TAVILY_API_KEY")
+    api_url = TAVILY_API_URL or "https://api.tavily.com/search"
+
+    if not api_key:
+        print("TAVILY_API_KEY NOT CONFIGURED", flush=True)
+        return {
+            "ok": False,
+            "error": "TAVILY_API_KEY не настроен в Render.",
+            "results": []
+        }
+
+    if not query:
+        return {
+            "ok": False,
+            "error": "Пустой поисковый запрос.",
+            "results": []
+        }
+
+    try:
+        print(f"TAVILY SEARCH QUERY: {query}", flush=True)
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                api_url,
+                json={
+                    "api_key": api_key,
+                    "query": query,
+                    "search_depth": "basic",
+                    "include_answer": False,
+                    "include_raw_content": False,
+                    "max_results": max_results
+                }
+            )
+
+        print(f"TAVILY STATUS: {response.status_code}", flush=True)
+
+        if response.status_code != 200:
+            print(f"TAVILY ERROR BODY: {response.text[:1000]}", flush=True)
+            return {
+                "ok": False,
+                "error": f"Ошибка Tavily: {response.status_code}",
+                "results": []
+            }
+
+        data = response.json()
+        raw_results = data.get("results", [])
+
+        results = []
+
+        for item in raw_results:
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "content": item.get("content", "")
+            })
+
+        return {
+            "ok": True,
+            "error": "",
+            "results": results
+        }
+
+    except Exception as e:
+        print(f"WEB SEARCH ERROR: {str(e)}", flush=True)
+
+        return {
+            "ok": False,
+            "error": str(e),
+            "results": []
+        }
 def extract_price_from_text(text):
     """
     Пытается найти цену в тексте.
