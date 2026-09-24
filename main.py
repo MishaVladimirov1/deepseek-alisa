@@ -22,15 +22,31 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 TAVILY_API_URL = "https://api.tavily.com/search"
 
+# Необязательно.
+# Потом можно добавить в Render переменную:
+# TELEGRAM_CONTACTS_JSON={"жене":"123456789","маме":"987654321"}
+TELEGRAM_CONTACTS_JSON = os.getenv("TELEGRAM_CONTACTS_JSON", "{}")
 
-# Память текущих сессий навыка
+try:
+    TELEGRAM_CONTACTS = json.loads(TELEGRAM_CONTACTS_JSON)
+    if not isinstance(TELEGRAM_CONTACTS, dict):
+        TELEGRAM_CONTACTS = {}
+except Exception:
+    TELEGRAM_CONTACTS = {}
+
+
+# Память текущих сессий навыка.
 SERVER_SESSIONS = {}
 
-# Простая общая память.
-# Внимание: на бесплатном Render она может сброситься после перезапуска сервера.
+# Простая глобальная память.
+# Важно: на бесплатном Render она может сбрасываться после перезапуска сервера.
 GLOBAL_PROFILE = {
-    "facts": [],
-    "contacts": {}
+    "facts": [
+        "пользователь находится в Краснодаре",
+        "для покупок учитывать доставку или наличие в Краснодаре"
+    ],
+    "contacts": {},
+    "telegram_contacts": TELEGRAM_CONTACTS
 }
 
 
@@ -54,7 +70,7 @@ MODES = {
 Ты голосовой ассистент. Отвечай максимально коротко: 1-3 предложения.
 Без воды. Только суть.
 """,
-        "max_tokens": 200,
+        "max_tokens": 220,
         "temperature": 0.5
     },
 
@@ -79,7 +95,7 @@ MODES = {
 Делай выводы, сравнивай источники, выделяй главное.
 Отвечай по-русски.
 """,
-        "max_tokens": 700,
+        "max_tokens": 750,
         "temperature": 0.5
     },
 
@@ -103,7 +119,7 @@ MODES = {
 Пиши аккуратно и структурированно.
 Отвечай по-русски.
 """,
-        "max_tokens": 650,
+        "max_tokens": 700,
         "temperature": 0.6
     },
 
@@ -112,10 +128,12 @@ MODES = {
         "prompt": """
 Ты помощник по покупкам.
 Помогай искать товары, сравнивать варианты, проверять риски, составлять список.
+Учитывай город Краснодар и доставку в Краснодар.
 Не оформляй и не оплачивай заказы самостоятельно.
 Всегда предлагай пользователю самому подтвердить покупку.
+Не выдумывай цены и ссылки.
 """,
-        "max_tokens": 650,
+        "max_tokens": 750,
         "temperature": 0.5
     },
 
@@ -126,7 +144,7 @@ MODES = {
 Помогай с рецептами, бытовыми задачами, ремонтом, покупками, списками дел и инструкциями.
 Отвечай просто и практично.
 """,
-        "max_tokens": 600,
+        "max_tokens": 650,
         "temperature": 0.6
     },
 
@@ -149,15 +167,15 @@ MODES = {
 Объясняй простыми словами, с примерами.
 Если тема сложная — разбивай на шаги.
 """,
-        "max_tokens": 600,
+        "max_tokens": 650,
         "temperature": 0.6
     }
 }
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Базовые функции
-# -----------------------------
+# ---------------------------------------------------------
 
 def normalize_text(text):
     text = (text or "").lower().strip()
@@ -175,6 +193,7 @@ def create_empty_state():
         "last_result": "",
         "last_links": [],
         "shopping_list": [],
+        "pending_task": None,
         "created_at": time.time(),
         "last_seen": time.time()
     }
@@ -221,7 +240,7 @@ def make_response(text, end_session=False):
 
     text = str(text).strip()
 
-    # Для колонки лучше коротко
+    # Для колонки лучше коротко.
     if len(text) > 950:
         text = text[:950] + "..."
 
@@ -235,9 +254,9 @@ def make_response(text, end_session=False):
     }
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Режимы
-# -----------------------------
+# ---------------------------------------------------------
 
 def normalize_mode_name(text):
     text = normalize_text(text)
@@ -266,6 +285,7 @@ def normalize_mode_name(text):
         "покупки": "покупки",
         "покупатель": "покупки",
         "товары": "покупки",
+        "магазины": "покупки",
 
         "дом": "дом",
         "домашний": "дом",
@@ -319,6 +339,7 @@ def help_text():
 
 Можно сказать:
 найди в интернете ...
+подбери самые дешёвые ...
 скинь в телеграм
 сделай документ
 сделай таблицу
@@ -332,13 +353,60 @@ def help_text():
 """
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Telegram
-# -----------------------------
+# ---------------------------------------------------------
 
-async def send_telegram_message(text):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("TELEGRAM NOT CONFIGURED", flush=True)
+def get_telegram_recipient_chat_id(command=None):
+    """
+    По умолчанию отправляем владельцу.
+    Если в команде есть 'жене', 'маме' и т.п.,
+    пробуем найти chat_id в TELEGRAM_CONTACTS_JSON или GLOBAL_PROFILE.
+    """
+
+    default_chat_id = TELEGRAM_CHAT_ID
+
+    if not command:
+        return default_chat_id
+
+    text = normalize_text(command)
+
+    contacts = {}
+    contacts.update(GLOBAL_PROFILE.get("telegram_contacts", {}))
+
+    # Нормализуем ключи.
+    normalized_contacts = {}
+    for name, chat_id in contacts.items():
+        normalized_contacts[normalize_text(name)] = str(chat_id)
+
+    for name, chat_id in normalized_contacts.items():
+        if name and name in text:
+            return chat_id
+
+    # Частые варианты.
+    if "жене" in text or "жена" in text or "супруге" in text:
+        for key in ["жене", "жена", "супруга", "супруге"]:
+            if key in normalized_contacts:
+                return normalized_contacts[key]
+
+    if "маме" in text or "мама" in text:
+        for key in ["маме", "мама"]:
+            if key in normalized_contacts:
+                return normalized_contacts[key]
+
+    return default_chat_id
+
+
+async def send_telegram_message(text, chat_id=None):
+    if not TELEGRAM_BOT_TOKEN:
+        print("TELEGRAM BOT TOKEN NOT CONFIGURED", flush=True)
+        return False
+
+    if not chat_id:
+        chat_id = TELEGRAM_CHAT_ID
+
+    if not chat_id:
+        print("TELEGRAM CHAT ID NOT CONFIGURED", flush=True)
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -346,23 +414,37 @@ async def send_telegram_message(text):
     if len(text) > 3900:
         text = text[:3900] + "\n\n...текст был сокращён."
 
-    async with httpx.AsyncClient(timeout=12.0) as client:
-        response = await client.post(
-            url,
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text,
-                "disable_web_page_preview": False
-            }
-        )
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            response = await client.post(
+                url,
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "disable_web_page_preview": False
+                }
+            )
 
-    print(f"TELEGRAM MESSAGE STATUS: {response.status_code}", flush=True)
-    return response.status_code == 200
+        print(f"TELEGRAM MESSAGE STATUS: {response.status_code}", flush=True)
+        print(f"TELEGRAM RESPONSE: {response.text[:500]}", flush=True)
+
+        return response.status_code == 200
+
+    except Exception as e:
+        print(f"TELEGRAM MESSAGE ERROR: {str(e)}", flush=True)
+        return False
 
 
-async def send_telegram_file(filename, content):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("TELEGRAM NOT CONFIGURED", flush=True)
+async def send_telegram_file(filename, content, chat_id=None):
+    if not TELEGRAM_BOT_TOKEN:
+        print("TELEGRAM BOT TOKEN NOT CONFIGURED", flush=True)
+        return False
+
+    if not chat_id:
+        chat_id = TELEGRAM_CHAT_ID
+
+    if not chat_id:
+        print("TELEGRAM CHAT ID NOT CONFIGURED", flush=True)
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
@@ -373,28 +455,56 @@ async def send_telegram_file(filename, content):
     if not content:
         content = "Пустой документ."
 
-    file_bytes = io.BytesIO(content.encode("utf-8"))
-    file_bytes.name = filename
+    try:
+        file_bytes = io.BytesIO(content.encode("utf-8"))
+        file_bytes.name = filename
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.post(
-            url,
-            data={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "caption": filename
-            },
-            files={
-                "document": (filename, file_bytes, "text/plain")
-            }
-        )
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                url,
+                data={
+                    "chat_id": chat_id,
+                    "caption": filename
+                },
+                files={
+                    "document": (filename, file_bytes, "text/plain")
+                }
+            )
 
-    print(f"TELEGRAM FILE STATUS: {response.status_code}", flush=True)
-    return response.status_code == 200
+        print(f"TELEGRAM FILE STATUS: {response.status_code}", flush=True)
+        print(f"TELEGRAM FILE RESPONSE: {response.text[:500]}", flush=True)
+
+        return response.status_code == 200
+
+    except Exception as e:
+        print(f"TELEGRAM FILE ERROR: {str(e)}", flush=True)
+        return False
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Интернет-поиск
-# -----------------------------
+# ---------------------------------------------------------
+
+def build_shop_queries(query):
+    """
+    Несколько поисковых запросов по реальным магазинам.
+    Особенно полезно для товаров.
+    """
+
+    base = query
+
+    shops = [
+        f"{base} site:wildberries.ru",
+        f"{base} site:ozon.ru",
+        f"{base} site:market.yandex.ru",
+        f"{base} site:hoff.ru",
+        f"{base} site:lemanapro.ru",
+        f"{base} купить Краснодар",
+        f"{base} доставка Краснодар"
+    ]
+
+    return shops
+
 
 async def web_search(query, max_results=5):
     if not TAVILY_API_KEY:
@@ -421,6 +531,7 @@ async def web_search(query, max_results=5):
         print(f"TAVILY STATUS: {response.status_code}", flush=True)
 
         if response.status_code != 200:
+            print(f"TAVILY ERROR BODY: {response.text[:500]}", flush=True)
             return {
                 "ok": False,
                 "error": f"Ошибка поиска: {response.status_code}",
@@ -466,18 +577,21 @@ def format_search_results(results):
         content = item.get("content", "")
 
         text += f"{i}. {title}\n"
+
         if content:
-            text += f"{content[:500]}\n"
+            text += f"{content[:650]}\n"
+
         if url:
             text += f"Ссылка: {url}\n"
+
         text += "\n"
 
     return text.strip()
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # DeepSeek
-# -----------------------------
+# ---------------------------------------------------------
 
 def build_messages(state, user_text, internet_context=""):
     mode_name = state.get("mode", "обычный")
@@ -497,8 +611,8 @@ def build_messages(state, user_text, internet_context=""):
             memory_text += f"- {fact}\n"
 
     if internet_context:
-        memory_text += "\nДанные из интернета:\n"
-        memory_text += internet_context[:6000]
+        memory_text += "\nДанные из интернета и инструментов:\n"
+        memory_text += internet_context[:9000]
         memory_text += "\n"
 
     system_prompt = mode["prompt"] + """
@@ -511,12 +625,15 @@ def build_messages(state, user_text, internet_context=""):
 - подготовка ссылок для заказа товаров и еды.
 
 Важные правила:
-1. Не выдумывай ссылки. Используй только ссылки из поиска или явно созданные ссылки на карты.
-2. Если пользователь просит отправить что-то на телефон, результат должен быть пригоден для Telegram.
-3. Не оформляй и не оплачивай заказы самостоятельно.
-4. Для покупок, еды и доставки готовь варианты и ссылки, но финальное подтверждение делает пользователь.
-5. Если данных мало, честно скажи об этом.
-6. Для голосового ответа отвечай коротко, а подробности лучше отправлять в Telegram.
+1. Не выдумывай ссылки. Используй только ссылки из поиска или явно созданные ссылки на карты/магазины.
+2. Не выдумывай точные цены, если их нет в найденных данных.
+3. Если цена не видна — напиши: цену нужно проверить по ссылке.
+4. Если пользователь просит отправить что-то на телефон, результат должен быть пригоден для Telegram.
+5. Не оформляй и не оплачивай заказы самостоятельно.
+6. Для покупок, еды и доставки готовь варианты и ссылки, но финальное подтверждение делает пользователь.
+7. Если данных мало, честно скажи об этом.
+8. Для голосового ответа отвечай коротко, а подробности лучше отправлять в Telegram.
+9. Для покупок учитывай Краснодар и доставку в Краснодар.
 """ + memory_text
 
     messages = [
@@ -545,41 +662,50 @@ def build_messages(state, user_text, internet_context=""):
 
 
 async def ask_deepseek(user_text, state, internet_context="", long_answer=False):
+    if not DEEPSEEK_API_KEY:
+        return "DeepSeek API не настроен.", state
+
     mode_name = state.get("mode", "обычный")
     mode = MODES.get(mode_name, MODES["обычный"])
 
     messages = build_messages(state, user_text, internet_context)
 
     max_tokens = mode["max_tokens"]
+
     if long_answer:
-        max_tokens = 1200
+        max_tokens = 1300
 
     print(f"DEEPSEEK REQUEST: {user_text}", flush=True)
     print(f"MODE: {mode_name}", flush=True)
 
-    async with httpx.AsyncClient(timeout=18.0) as client:
-        response = await client.post(
-            DEEPSEEK_API_URL,
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "deepseek-chat",
-                "messages": messages,
-                "temperature": mode["temperature"],
-                "max_tokens": max_tokens
-            }
-        )
+    try:
+        async with httpx.AsyncClient(timeout=18.0) as client:
+            response = await client.post(
+                DEEPSEEK_API_URL,
+                headers={
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": messages,
+                    "temperature": mode["temperature"],
+                    "max_tokens": max_tokens
+                }
+            )
 
-    print(f"DEEPSEEK STATUS: {response.status_code}", flush=True)
+        print(f"DEEPSEEK STATUS: {response.status_code}", flush=True)
 
-    if response.status_code != 200:
-        print(f"DEEPSEEK ERROR: {response.text}", flush=True)
+        if response.status_code != 200:
+            print(f"DEEPSEEK ERROR: {response.text[:800]}", flush=True)
+            return "DeepSeek сейчас не ответил. Попробуйте позже.", state
+
+        data = response.json()
+        answer = data["choices"][0]["message"]["content"].strip()
+
+    except Exception as e:
+        print(f"DEEPSEEK REQUEST ERROR: {str(e)}", flush=True)
         return "DeepSeek сейчас не ответил. Попробуйте позже.", state
-
-    data = response.json()
-    answer = data["choices"][0]["message"]["content"].strip()
 
     history = state.get("history", [])
 
@@ -599,9 +725,9 @@ async def ask_deepseek(user_text, state, internet_context="", long_answer=False)
     return answer, state
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Определение намерений
-# -----------------------------
+# ---------------------------------------------------------
 
 def wants_telegram(command):
     text = normalize_text(command)
@@ -617,7 +743,22 @@ def wants_telegram(command):
         "на телефон",
         "сохрани мне",
         "ссылку мне",
-        "ссылки мне"
+        "ссылки мне",
+
+        # Чтобы подборки товаров чаще уходили в Telegram.
+        "подбери",
+        "подобрать",
+        "выбери",
+        "выбрать",
+        "самые дешевые",
+        "самый дешевый",
+        "самая дешевая",
+        "дешевые",
+        "недорогие",
+        "товар",
+        "товары",
+        "шторы",
+        "занавески"
     ]
 
     return any(w in text for w in words)
@@ -643,8 +784,10 @@ def needs_web(command):
     text = normalize_text(command)
 
     words = [
+        # общее
         "найди",
         "поищи",
+        "посмотри",
         "посмотри в интернете",
         "в интернете",
         "актуально",
@@ -655,26 +798,73 @@ def needs_web(command):
         "новости",
         "курс",
         "погода",
+
+        # покупки
         "цена",
+        "цены",
         "стоит",
+        "стоимость",
         "где купить",
         "купить",
+        "подбери",
+        "подобрать",
+        "выбери",
+        "выбрать",
+        "самый дешевый",
+        "самые дешевые",
+        "самая дешевая",
+        "дешевый",
+        "дешевая",
+        "дешевые",
+        "недорогой",
+        "недорогая",
+        "недорогие",
         "товар",
+        "товары",
+        "магазин",
+        "магазины",
+        "маркет",
+        "маркетплейс",
+        "скидки",
+        "акции",
         "отзывы",
-        "адрес",
-        "рядом",
-        "ближайший",
-        "ближайшая",
-        "маршрут",
-        "карта",
+
+        # доставка/еда
         "доставка",
         "заказать",
         "закажи",
         "еда",
         "ресторан",
         "кафе",
+        "пицца",
+        "суши",
+        "роллы",
+        "продукты",
+
+        # места
+        "адрес",
+        "рядом",
+        "ближайший",
+        "ближайшая",
+        "маршрут",
+        "карта",
         "аптека",
-        "магазин",
+
+        # товары для дома
+        "шторы",
+        "штора",
+        "занавески",
+        "тюль",
+        "карниз",
+        "мебель",
+        "лампа",
+        "светильник",
+        "ковер",
+        "ковёр",
+        "постельное",
+        "полотенца",
+
+        # отправка ссылок
         "ссылка",
         "ссылки"
     ]
@@ -711,12 +901,29 @@ def is_order_request(command):
         "привези",
         "купить",
         "товар",
+        "товары",
+        "магазин",
+        "магазины",
         "еда",
         "пицца",
         "суши",
         "роллы",
         "бургер",
-        "продукты"
+        "продукты",
+
+        # бытовые покупки
+        "шторы",
+        "штора",
+        "занавески",
+        "тюль",
+        "карниз",
+        "ковер",
+        "ковёр",
+        "мебель",
+        "лампа",
+        "светильник",
+        "постельное",
+        "полотенца"
     ]
 
     return any(w in text for w in words)
@@ -735,6 +942,91 @@ def is_phone_call_request(command):
     return any(w in text for w in words)
 
 
+def shopping_needs_clarification(command):
+    """
+    Проверяет, нужно ли задать уточняющий вопрос по покупке.
+    Например, для штор желательно знать тип, размер, цвет.
+    """
+    text = normalize_text(command)
+
+    # Шторы
+    if any(w in text for w in ["шторы", "штора", "занавески", "тюль"]):
+        has_type = any(w in text for w in [
+            "блэкаут",
+            "blackout",
+            "тюль",
+            "рулонные",
+            "римские",
+            "обычные",
+            "портьеры",
+            "занавески"
+        ])
+
+        has_size = any(w in text for w in [
+            "метр",
+            "метра",
+            "см",
+            "сантиметр",
+            "ширина",
+            "высота",
+            "200",
+            "250",
+            "270",
+            "300",
+            "2 метра",
+            "два метра",
+            "два на",
+            "2 на"
+        ])
+
+        has_color = any(w in text for w in [
+            "белые",
+            "белый",
+            "серые",
+            "серый",
+            "бежевые",
+            "бежевый",
+            "черные",
+            "черный",
+            "чёрные",
+            "чёрный",
+            "зеленые",
+            "зелёные",
+            "синие",
+            "коричневые",
+            "молочные",
+            "кремовые"
+        ])
+
+        # Если вообще мало данных — спрашиваем.
+        if not has_type and not has_size and not has_color:
+            return (
+                "Какие шторы нужны: тюль, блэкаут, рулонные или обычные? "
+                "И какой примерно размер?"
+            )
+
+        # Если есть тип, но нет размера.
+        if has_type and not has_size:
+            return "Какой примерно размер штор: ширина и высота?"
+
+    # Мебель
+    if any(w in text for w in ["диван", "кровать", "стол", "шкаф", "комод"]):
+        has_size = any(w in text for w in ["размер", "ширина", "высота", "длина", "см", "метр"])
+        has_budget = any(w in text for w in ["до ", "руб", "тысяч", "бюджет"])
+
+        if not has_size and not has_budget:
+            return "Уточните размер и примерный бюджет."
+
+    # Одежда/обувь
+    if any(w in text for w in ["куртку", "куртка", "джинсы", "футболку", "обувь", "кроссовки"]):
+        has_size = any(w in text for w in ["размер", "s", "m", "l", "xl", "42", "43", "44", "45"])
+
+        if not has_size:
+            return "Какой размер нужен?"
+
+    return None
+
+
 def extract_search_query(command):
     text = command.strip()
 
@@ -744,6 +1036,11 @@ def extract_search_query(command):
         "посмотри в интернете",
         "найди",
         "поищи",
+        "посмотри",
+        "подбери",
+        "подобрать",
+        "выбери",
+        "выбрать",
         "скинь в телеграм",
         "отправь в телеграм",
         "пришли в телеграм",
@@ -767,12 +1064,42 @@ def extract_search_query(command):
     if not text:
         text = command.strip()
 
+    # По умолчанию добавляем Краснодар, если это покупка/место/доставка.
+    low2 = normalize_text(text)
+
+    shopping_words = [
+        "шторы",
+        "штора",
+        "занавески",
+        "тюль",
+        "товар",
+        "купить",
+        "магазин",
+        "доставка",
+        "цена",
+        "дешевые",
+        "недорогие",
+        "мебель",
+        "еда",
+        "пицца",
+        "суши",
+        "продукты",
+        "ковер",
+        "ковёр",
+        "лампа",
+        "светильник"
+    ]
+
+    if any(w in low2 for w in shopping_words):
+        if "краснодар" not in low2:
+            text = text + " Краснодар"
+
     return text
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Карты, заказы, телефон
-# -----------------------------
+# ---------------------------------------------------------
 
 def make_map_links(query):
     encoded = urllib.parse.quote(query)
@@ -791,17 +1118,18 @@ def make_order_links(query):
     links.append(("Яндекс Маркет", f"https://market.yandex.ru/search?text={encoded}"))
     links.append(("Ozon", f"https://www.ozon.ru/search/?text={encoded}"))
     links.append(("Wildberries", f"https://www.wildberries.ru/catalog/0/search.aspx?search={encoded}"))
+    links.append(("Hoff", f"https://hoff.ru/search/?q={encoded}"))
+    links.append(("Лемана ПРО", f"https://lemanapro.ru/search/?q={encoded}"))
 
-    # Для еды удобнее давать ссылки-поиски
-    links.append(("Яндекс Еда", f"https://eda.yandex.ru/"))
-    links.append(("Купер", f"https://kuper.ru/"))
-    links.append(("Самокат", f"https://samokat.ru/"))
+    # Для еды и продуктов.
+    links.append(("Яндекс Еда", "https://eda.yandex.ru/"))
+    links.append(("Купер", "https://kuper.ru/"))
+    links.append(("Самокат", "https://samokat.ru/"))
 
     return links
 
 
 def extract_phone_number(text):
-    # Ищем номер телефона в тексте
     match = re.search(r"(\+?\d[\d\-\s\(\)]{7,}\d)", text)
 
     if not match:
@@ -842,8 +1170,9 @@ def save_contact_from_command(command):
     cleaned = cleaned.replace("запомни номер", "")
     cleaned = cleaned.replace("телефон", "")
     cleaned = cleaned.replace("номер", "")
-    cleaned = cleaned.replace(normalize_text(number), "")
+    cleaned = re.sub(r"\+?\d[\d\-\s\(\)]{7,}\d", "", cleaned)
     cleaned = re.sub(r"\d+", "", cleaned)
+
     name = cleaned.strip()
 
     if not name:
@@ -852,6 +1181,46 @@ def save_contact_from_command(command):
     GLOBAL_PROFILE["contacts"][name] = number
 
     return name, number
+
+
+def save_telegram_contact_from_command(command):
+    """
+    Пример:
+    запомни телеграм жены 123456789
+    запомни telegram мамы 987654321
+
+    Важно: человек должен сам нажать Start у вашего Telegram-бота,
+    иначе бот не сможет ему писать.
+    """
+
+    text = command.strip()
+    low = normalize_text(text)
+
+    if not ("телеграм" in low or "telegram" in low):
+        return None
+
+    match = re.search(r"(-?\d{5,})", text)
+
+    if not match:
+        return None
+
+    chat_id = match.group(1)
+
+    cleaned = low
+    cleaned = cleaned.replace("запомни телеграм", "")
+    cleaned = cleaned.replace("запомни telegram", "")
+    cleaned = cleaned.replace("телеграм", "")
+    cleaned = cleaned.replace("telegram", "")
+    cleaned = cleaned.replace(chat_id, "")
+
+    name = cleaned.strip()
+
+    if not name:
+        name = "контакт"
+
+    GLOBAL_PROFILE["telegram_contacts"][name] = chat_id
+
+    return name, chat_id
 
 
 async def handle_call_request(command):
@@ -909,9 +1278,9 @@ async def handle_call_request(command):
     return "Я не могу позвонить сама, но отправила ссылку для звонка в Телеграм."
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Списки и память
-# -----------------------------
+# ---------------------------------------------------------
 
 def extract_fact(command):
     text = command.strip()
@@ -997,20 +1366,22 @@ def add_to_shopping_list(command, state):
     return items
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Фоновый агент для Telegram
-# -----------------------------
+# ---------------------------------------------------------
 
 async def background_agent_task(command, session_id, state_snapshot):
     """
     Долгие задачи выполняем в фоне:
     поиск, анализ, файл, отправка в Telegram.
-    Колонка быстро отвечает: "Сделаю и отправлю".
+    Колонка быстро отвечает, а подробности приходят в Telegram.
     """
 
     try:
         state = copy.deepcopy(state_snapshot)
         query = extract_search_query(command)
+
+        recipient_chat_id = get_telegram_recipient_chat_id(command)
 
         internet_context = ""
         links = []
@@ -1029,28 +1400,44 @@ async def background_agent_task(command, session_id, state_snapshot):
             links.extend([yandex, google])
             internet_context += map_text + "\n\n"
 
-        # Заказы
+        # Если это покупка/товар/доставка — ищем по реальным магазинам.
         if is_order_request(command):
-            order_links = make_order_links(query)
+            shop_queries = build_shop_queries(query)
 
-            order_text = (
-                f"🛒 Подготовка заказа по запросу:\n\n"
-                f"{query}\n\n"
-                f"Я не оформляю и не оплачиваю заказы автоматически. "
-                f"Ниже ссылки, где можно вручную проверить и оформить заказ:\n\n"
+            internet_context += (
+                "Задача: найти реальные варианты в магазинах, желательно доступные в Краснодаре "
+                "или с доставкой в Краснодар. Не выдумывай ссылки. Используй только найденные ссылки.\n\n"
             )
 
+            for shop_query in shop_queries:
+                search = await web_search(shop_query, max_results=3)
+
+                internet_context += f"\nПоиск: {shop_query}\n"
+
+                if search["ok"] and search["results"]:
+                    results_text = format_search_results(search["results"])
+                    internet_context += results_text + "\n"
+
+                    for item in search["results"]:
+                        if item.get("url"):
+                            links.append(item["url"])
+                else:
+                    internet_context += "Ничего полезного не найдено.\n"
+
+            # Добавляем безопасные ссылки на поиск по магазинам.
+            order_links = make_order_links(query)
+
+            internet_context += "\nДополнительные ссылки для самостоятельной проверки:\n"
+
             for title, url in order_links:
-                order_text += f"- {title}: {url}\n"
+                internet_context += f"{title}: {url}\n"
                 links.append(url)
 
-            internet_context += order_text + "\n\n"
+        # Если не покупка, но интернет нужен — обычный поиск.
+        elif needs_web(command):
+            search = await web_search(query, max_results=6)
 
-        # Обычный интернет-поиск
-        if needs_web(command):
-            search = await web_search(query, max_results=5)
-
-            if search["ok"]:
+            if search["ok"] and search["results"]:
                 results_text = format_search_results(search["results"])
                 internet_context += "\nРезультаты интернет-поиска:\n" + results_text
 
@@ -1058,15 +1445,21 @@ async def background_agent_task(command, session_id, state_snapshot):
                     if item.get("url"):
                         links.append(item["url"])
             else:
-                internet_context += f"\nИнтернет-поиск не сработал: {search['error']}"
+                internet_context += f"\nИнтернет-поиск не сработал или ничего не нашёл: {search['error']}"
 
         prompt = (
             f"Задача пользователя: {command}\n\n"
-            f"Подготовь полезный результат для отправки в Telegram. "
-            f"Если это товар, еда или заказ — дай варианты и ссылки, но напомни, что финальное оформление делает пользователь. "
-            f"Если это рецепт — дай список продуктов и шаги. "
-            f"Если это таблица — сделай аккуратную текстовую таблицу. "
-            f"Если это документ — оформи как готовый текст документа."
+            f"Подготовь результат для Telegram.\n\n"
+            f"Правила:\n"
+            f"1. Если это подбор товара — перечисли конкретные варианты из найденных результатов.\n"
+            f"2. Если точных цен нет в найденных сниппетах — честно напиши, что цену надо проверить по ссылке.\n"
+            f"3. Не выдумывай магазины, цены и ссылки.\n"
+            f"4. Если пользователь просил самые дешёвые — отсортируй найденные варианты по цене, если цена видна.\n"
+            f"5. Если цена не видна — дай ссылки на поиск в магазинах и объясни, где проверить.\n"
+            f"6. Учитывай Краснодар и доставку в Краснодар.\n"
+            f"7. Если это заказ еды или товара — не оформляй и не оплачивай заказ сам, только дай ссылки.\n"
+            f"8. В конце дай короткий вывод: что выбрать первым.\n"
+            f"9. Тон — практичный, без лишних оправданий.\n"
         )
 
         answer, state = await ask_deepseek(
@@ -1076,26 +1469,42 @@ async def background_agent_task(command, session_id, state_snapshot):
             long_answer=True
         )
 
-        if links:
-            state["last_links"] = links[-20:]
+        # Добавляем найденные ссылки в конец, чтобы они точно были.
+        unique_links = []
+        for link in links:
+            if link and link not in unique_links:
+                unique_links.append(link)
+
+        if unique_links:
+            state["last_links"] = unique_links[-30:]
+
+            links_text = "\n\n🔗 Ссылки для проверки:\n"
+            for i, link in enumerate(unique_links[:15], start=1):
+                links_text += f"{i}. {link}\n"
+
+            # Если DeepSeek вдруг не вставил ссылки — добавим сами.
+            if "http" not in answer:
+                answer += links_text
 
         state["last_result"] = answer
 
-        # Отправляем файл, если пользователь просил файл/документ/таблицу
+        # Отправляем файл, если пользователь просил файл/документ/таблицу.
         if wants_file(command):
             filename = "assistant_result.txt"
 
-            if "таблиц" in normalize_text(command):
+            low = normalize_text(command)
+
+            if "таблиц" in low:
                 filename = "table.txt"
-            elif "рецепт" in normalize_text(command):
+            elif "рецепт" in low:
                 filename = "recipe.txt"
-            elif "документ" in normalize_text(command):
+            elif "документ" in low:
                 filename = "document.txt"
 
-            await send_telegram_file(filename, answer)
-            await send_telegram_message("Готово. Файл отправлен выше.")
+            await send_telegram_file(filename, answer, chat_id=recipient_chat_id)
+            await send_telegram_message("Готово. Файл отправлен выше.", chat_id=recipient_chat_id)
         else:
-            await send_telegram_message(answer)
+            await send_telegram_message(answer, chat_id=recipient_chat_id)
 
         save_state(session_id, state)
 
@@ -1106,9 +1515,9 @@ async def background_agent_task(command, session_id, state_snapshot):
         )
 
 
-# -----------------------------
+# ---------------------------------------------------------
 # Главные endpoints
-# -----------------------------
+# ---------------------------------------------------------
 
 @app.get("/")
 async def index():
@@ -1118,6 +1527,7 @@ async def index():
         "greeting": "Привет!",
         "telegram_configured": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
         "internet_configured": bool(TAVILY_API_KEY),
+        "telegram_contacts": list(GLOBAL_PROFILE.get("telegram_contacts", {}).keys()),
         "memory": "server session memory",
         "active_sessions": len(SERVER_SESSIONS),
         "features": [
@@ -1127,6 +1537,8 @@ async def index():
             "Telegram files",
             "maps links",
             "safe order preparation",
+            "shopping clarification through voice",
+            "Krasnodar shopping context",
             "session memory",
             "modes",
             "phone call link helper"
@@ -1157,22 +1569,50 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
     print(f"COMMAND: {command}", flush=True)
     print(f"STATE: {state}", flush=True)
 
-    # Короткое приветствие
+    # Короткое приветствие.
     if is_new or not command:
         save_state(session_id, state)
         return JSONResponse(make_response("Привет!"))
 
-    # Выход
+    # Выход.
     if text in ["хватит", "стоп", "выход", "закончить", "завершить"]:
         save_state(session_id, state)
         return JSONResponse(make_response("Хорошо.", end_session=True))
 
-    # Помощь
+    # Помощь.
     if text in ["помощь", "что ты умеешь", "команды"]:
         save_state(session_id, state)
         return JSONResponse(make_response(help_text()))
 
-    # Режимы
+    # Если ранее был задан уточняющий вопрос — объединяем старую задачу и новый ответ.
+    pending_task = state.get("pending_task")
+
+    if pending_task and pending_task.get("type") == "shopping_clarification":
+        original_command = pending_task.get("original_command", "")
+
+        combined_command = (
+            original_command
+            + ". Уточнение пользователя: "
+            + command
+            + ". Найди реальные варианты в магазинах с доставкой или наличием в Краснодаре. Отправь результат в Телеграм."
+        )
+
+        state["pending_task"] = None
+
+        state_snapshot = copy.deepcopy(state)
+
+        background_tasks.add_task(
+            background_agent_task,
+            combined_command,
+            session_id,
+            state_snapshot
+        )
+
+        save_state(session_id, state)
+
+        return JSONResponse(make_response("Поняла. Ищу варианты в магазинах и отправлю в Телеграм."))
+
+    # Режимы.
     if text in ["какой режим", "какой сейчас режим", "текущий режим"]:
         mode_name = state.get("mode", "обычный")
         title = MODES.get(mode_name, MODES["обычный"])["title"]
@@ -1196,7 +1636,19 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         return JSONResponse(make_response(f"{title} включён."))
 
-    # Сохранение контакта
+    # Сохранение Telegram-контакта.
+    if text.startswith("запомни телеграм") or text.startswith("запомни telegram"):
+        result = save_telegram_contact_from_command(command)
+
+        if result:
+            name, chat_id = result
+            save_state(session_id, state)
+            return JSONResponse(make_response(f"Запомнила Telegram для контакта: {name}."))
+
+        save_state(session_id, state)
+        return JSONResponse(make_response("Не смогла распознать Telegram chat id."))
+
+    # Сохранение телефонного контакта.
     if text.startswith("запомни телефон") or text.startswith("запомни номер"):
         result = save_contact_from_command(command)
 
@@ -1208,13 +1660,13 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response("Не смогла распознать номер."))
 
-    # Запрос на звонок
+    # Запрос на звонок.
     if is_phone_call_request(command):
         answer = await handle_call_request(command)
         save_state(session_id, state)
         return JSONResponse(make_response(answer))
 
-    # Запомнить факт
+    # Запомнить факт.
     if text.startswith("запомни"):
         fact = extract_fact(command)
 
@@ -1231,14 +1683,14 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response(f"Запомнила: {fact}."))
 
-    # Автозапоминание имени
+    # Автозапоминание имени.
     remembered_name = try_auto_remember_name(command, state)
 
     if remembered_name:
         save_state(session_id, state)
         return JSONResponse(make_response(f"Приятно познакомиться, {remembered_name}."))
 
-    # Что помнишь
+    # Что помнишь.
     if text in [
         "что ты помнишь",
         "что ты обо мне помнишь",
@@ -1246,8 +1698,9 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
     ]:
         all_facts = GLOBAL_PROFILE.get("facts", []) + state.get("facts", [])
         contacts = GLOBAL_PROFILE.get("contacts", {})
+        telegram_contacts = GLOBAL_PROFILE.get("telegram_contacts", {})
 
-        if not all_facts and not contacts:
+        if not all_facts and not contacts and not telegram_contacts:
             save_state(session_id, state)
             return JSONResponse(make_response("Пока я ничего не запомнила."))
 
@@ -1257,23 +1710,27 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
             result += "Я помню: " + "; ".join(all_facts[-10:]) + ". "
 
         if contacts:
-            result += "Есть контакты: " + ", ".join(contacts.keys()) + "."
+            result += "Телефонные контакты: " + ", ".join(contacts.keys()) + ". "
+
+        if telegram_contacts:
+            result += "Telegram-контакты: " + ", ".join(telegram_contacts.keys()) + "."
 
         save_state(session_id, state)
         return JSONResponse(make_response(result))
 
-    # Очистка памяти
+    # Очистка памяти текущей сессии.
     if text in ["очисти память", "сотри память", "забудь все", "забудь всё"]:
         state["facts"] = []
         state["history"] = []
         state["last_result"] = ""
         state["last_links"] = []
         state["shopping_list"] = []
+        state["pending_task"] = None
 
         save_state(session_id, state)
         return JSONResponse(make_response("Память очищена."))
 
-    # Список покупок
+    # Список покупок.
     added_items = add_to_shopping_list(command, state)
 
     if added_items:
@@ -1296,7 +1753,29 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response("Список покупок очищен."))
 
-    # Скинуть последний результат в Telegram
+    # Отправка списка покупок в Telegram.
+    if "список покупок" in text and wants_telegram(command):
+        items = state.get("shopping_list", [])
+
+        if not items:
+            save_state(session_id, state)
+            return JSONResponse(make_response("Список покупок пуст."))
+
+        message = "🛒 Список покупок:\n\n"
+        for item in items:
+            message += f"- {item}\n"
+
+        recipient_chat_id = get_telegram_recipient_chat_id(command)
+        ok = await send_telegram_message(message, chat_id=recipient_chat_id)
+
+        save_state(session_id, state)
+
+        if ok:
+            return JSONResponse(make_response("Отправила список покупок."))
+        else:
+            return JSONResponse(make_response("Не получилось отправить в Телеграм."))
+
+    # Скинуть последний результат в Telegram.
     if text in [
         "скинь на телефон",
         "отправь в телеграм",
@@ -1311,7 +1790,8 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
             save_state(session_id, state)
             return JSONResponse(make_response("Пока нечего отправлять."))
 
-        ok = await send_telegram_message(last)
+        recipient_chat_id = get_telegram_recipient_chat_id(command)
+        ok = await send_telegram_message(last, chat_id=recipient_chat_id)
 
         save_state(session_id, state)
 
@@ -1320,8 +1800,22 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         else:
             return JSONResponse(make_response("Телеграм не настроен или не ответил."))
 
-    # Если пользователь просит Telegram/файл/длинный поиск — запускаем задачу в фоне
-    if wants_telegram(command) or wants_file(command):
+    # Уточняющие вопросы для покупок.
+    # Важно: спрашиваем через колонку, а не пишем в Telegram.
+    clarification = shopping_needs_clarification(command)
+
+    if clarification:
+        state["pending_task"] = {
+            "type": "shopping_clarification",
+            "original_command": command
+        }
+
+        save_state(session_id, state)
+        return JSONResponse(make_response(clarification))
+
+    # Если пользователь просит Telegram/файл/покупку/длинный поиск — запускаем задачу в фоне.
+    # Так колонка не ждёт долго и не падает по таймауту.
+    if wants_telegram(command) or wants_file(command) or is_order_request(command):
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
             save_state(session_id, state)
             return JSONResponse(make_response("Телеграм пока не настроен."))
@@ -1339,10 +1833,13 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         if wants_file(command):
             return JSONResponse(make_response("Подготовлю файл и отправлю в Телеграм."))
-        else:
-            return JSONResponse(make_response("Сделаю и отправлю в Телеграм."))
 
-    # Интернет-поиск без Telegram
+        if is_order_request(command):
+            return JSONResponse(make_response("Ищу варианты и отправлю в Телеграм."))
+
+        return JSONResponse(make_response("Сделаю и отправлю в Телеграм."))
+
+    # Интернет-поиск без Telegram.
     if needs_web(command):
         query = extract_search_query(command)
 
@@ -1381,10 +1878,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         else:
             internet_context += f"\nПоиск не сработал: {search['error']}"
 
-        if not DEEPSEEK_API_KEY:
-            save_state(session_id, state)
-            return JSONResponse(make_response("DeepSeek API не настроен."))
-
         answer, state = await ask_deepseek(
             command,
             state,
@@ -1397,11 +1890,7 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         return JSONResponse(make_response(answer))
 
-    # Обычный вопрос к DeepSeek
-    if not DEEPSEEK_API_KEY:
-        save_state(session_id, state)
-        return JSONResponse(make_response("DeepSeek API не настроен."))
-
+    # Обычный вопрос к DeepSeek.
     try:
         answer, state = await ask_deepseek(command, state)
         state["last_result"] = answer
