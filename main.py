@@ -487,84 +487,224 @@ async def send_telegram_file(filename, content, chat_id=None):
 
 def build_shop_queries(query):
     """
-    Несколько поисковых запросов по реальным магазинам.
-    Особенно полезно для товаров.
+    Делаем запросы так, чтобы найти именно товары с ценами,
+    а не просто страницы поиска.
     """
 
     base = query
 
-    shops = [
-        f"{base} site:wildberries.ru",
-        f"{base} site:ozon.ru",
-        f"{base} site:market.yandex.ru",
-        f"{base} site:hoff.ru",
-        f"{base} site:lemanapro.ru",
+    queries = [
+        f"{base} купить цена",
+        f"{base} цена Краснодар",
         f"{base} купить Краснодар",
-        f"{base} доставка Краснодар"
+        f"{base} доставка Краснодар",
+
+        f"{base} site:market.yandex.ru/product",
+        f"{base} site:market.yandex.ru цена",
+
+        f"{base} site:dns-shop.ru/product",
+        f"{base} site:dns-shop.ru цена",
+
+        f"{base} site:citilink.ru/product",
+        f"{base} site:citilink.ru цена",
+
+        f"{base} site:ozon.ru/product",
+        f"{base} site:ozon.ru цена",
+
+        f"{base} site:wildberries.ru/catalog",
+        f"{base} site:wildberries.ru цена",
+
+        f"{base} site:avito.ru/krasnodar",
+        f"{base} Авито Краснодар цена"
     ]
 
-    return shops
+    # Для дома/мебели добавляем магазины дома
+    low = normalize_text(base)
+
+    if any(w in low for w in ["шторы", "тюль", "занавески", "карниз", "ковер", "мебель"]):
+        queries.extend([
+            f"{base} site:hoff.ru цена",
+            f"{base} site:lemanapro.ru цена",
+            f"{base} site:leroymerlin.ru цена"
+        ])
+
+    return queries
+def extract_price_from_text(text):
+    """
+    Пытается найти цену в тексте.
+    Возвращает число в рублях или None.
+    """
+
+    if not text:
+        return None
+
+    text = str(text)
+    text = text.replace("\u202f", " ")
+    text = text.replace("\xa0", " ")
+
+    patterns = [
+        r"(\d{1,3}(?:[\s\.]\d{3})+)\s*(?:₽|руб|р)",
+        r"(\d{4,7})\s*(?:₽|руб|р)",
+        r"от\s*(\d{1,3}(?:[\s\.]\d{3})+)",
+        r"от\s*(\d{4,7})"
+    ]
+
+    prices = []
+
+    for pattern in patterns:
+        matches = re.findall(pattern, text, flags=re.IGNORECASE)
+
+        for match in matches:
+            raw = str(match)
+            raw = raw.replace(" ", "").replace(".", "")
+
+            try:
+                price = int(raw)
+
+                # Отсекаем мусорные числа
+                if 50 <= price <= 2_000_000:
+                    prices.append(price)
+            except Exception:
+                pass
+
+    if not prices:
+        return None
+
+    return min(prices)
 
 
-async def web_search(query, max_results=5):
-    if not TAVILY_API_KEY:
-        return {
-            "ok": False,
-            "error": "TAVILY_API_KEY не настроен.",
-            "results": []
-        }
+def clean_product_title(title):
+    title = str(title or "").strip()
 
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            response = await client.post(
-                TAVILY_API_URL,
-                json={
-                    "api_key": TAVILY_API_KEY,
-                    "query": query,
-                    "search_depth": "basic",
-                    "include_answer": False,
-                    "include_raw_content": False,
-                    "max_results": max_results
-                }
-            )
+    # Убираем мусор
+    title = re.sub(r"\s+", " ", title)
+    title = title.replace("— купить", "")
+    title = title.replace("- купить", "")
+    title = title.strip(" -—|")
 
-        print(f"TAVILY STATUS: {response.status_code}", flush=True)
-
-        if response.status_code != 200:
-            print(f"TAVILY ERROR BODY: {response.text[:500]}", flush=True)
-            return {
-                "ok": False,
-                "error": f"Ошибка поиска: {response.status_code}",
-                "results": []
-            }
-
-        data = response.json()
-        results = data.get("results", [])
-
-        clean_results = []
-
-        for item in results:
-            clean_results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "content": item.get("content", "")
-            })
-
-        return {
-            "ok": True,
-            "error": "",
-            "results": clean_results
-        }
-
-    except Exception as e:
-        print(f"WEB SEARCH ERROR: {str(e)}", flush=True)
-        return {
-            "ok": False,
-            "error": str(e),
-            "results": []
-        }
+    return title
 
 
+def is_generic_search_url(url):
+    """
+    Проверяет, является ли ссылка просто страницей поиска.
+    Такие ссылки нельзя выдавать как найденный товар.
+    """
+
+    if not url:
+        return True
+
+    url_low = url.lower()
+
+    bad_parts = [
+        "/search",
+        "search?",
+        "text=",
+        "q=",
+        "query=",
+        "catalog/0/search",
+        "поиск"
+    ]
+
+    return any(part in url_low for part in bad_parts)
+
+
+def collect_product_candidates(results):
+    """
+    Превращает результаты поиска в список кандидатов:
+    title, url, price, snippet.
+    Берём только то, где есть цена и нормальная ссылка.
+    """
+
+    candidates = []
+
+    for item in results:
+        title = item.get("title", "")
+        url = item.get("url", "")
+        content = item.get("content", "")
+
+        combined_text = f"{title}\n{content}"
+
+        price = extract_price_from_text(combined_text)
+
+        # Если цены нет — это не кандидат на "самый дешёвый"
+        if price is None:
+            continue
+
+        # Если это просто ссылка на поиск — не считаем товаром
+        if is_generic_search_url(url):
+            continue
+
+        candidates.append({
+            "title": clean_product_title(title),
+            "url": url,
+            "price": price,
+            "content": content[:500]
+        })
+
+    return candidates
+
+
+def deduplicate_candidates(candidates):
+    """
+    Убирает дубликаты по ссылке и похожему названию.
+    """
+
+    seen_urls = set()
+    unique = []
+
+    for item in candidates:
+        url = item.get("url", "")
+
+        if not url:
+            continue
+
+        if url in seen_urls:
+            continue
+
+        seen_urls.add(url)
+        unique.append(item)
+
+    return unique
+
+
+def format_cheapest_products(candidates, query, limit=5):
+    """
+    Формирует нормальное сообщение с самыми дешёвыми вариантами.
+    """
+
+    if not candidates:
+        return ""
+
+    candidates = deduplicate_candidates(candidates)
+    candidates = sorted(candidates, key=lambda x: x.get("price", 999999999))
+    candidates = candidates[:limit]
+
+    text = f"🛒 Самые дешёвые найденные варианты по запросу:\n{query}\n\n"
+
+    for i, item in enumerate(candidates, start=1):
+        title = item.get("title", "Товар")
+        price = item.get("price")
+        url = item.get("url")
+
+        text += f"{i}. {title}\n"
+        text += f"Цена в найденных данных: {price:,} ₽\n".replace(",", " ")
+        text += f"Ссылка: {url}\n\n"
+
+    best = candidates[0]
+
+    text += (
+        f"✅ Самый дешёвый из найденных вариантов:\n"
+        f"{best.get('title')}\n"
+        f"Цена: {best.get('price'):,} ₽\n"
+        f"{best.get('url')}\n\n"
+    ).replace(",", " ")
+
+    text += (
+        "Важно: цена могла измениться. Перед покупкой проверьте цену, наличие, продавца и доставку в Краснодар."
+    )
+
+    return text
 def format_search_results(results):
     if not results:
         return "Ничего не найдено."
@@ -1374,7 +1514,8 @@ async def background_agent_task(command, session_id, state_snapshot):
     """
     Долгие задачи выполняем в фоне:
     поиск, анализ, файл, отправка в Telegram.
-    Колонка быстро отвечает, а подробности приходят в Telegram.
+    Для товаров теперь пытаемся выбрать самые дешёвые реальные варианты,
+    а не просто отправлять ссылки на поиск.
     """
 
     try:
@@ -1385,6 +1526,7 @@ async def background_agent_task(command, session_id, state_snapshot):
 
         internet_context = ""
         links = []
+        product_candidates = []
 
         # Карты
         if is_map_request(command):
@@ -1400,17 +1542,17 @@ async def background_agent_task(command, session_id, state_snapshot):
             links.extend([yandex, google])
             internet_context += map_text + "\n\n"
 
-        # Если это покупка/товар/доставка — ищем по реальным магазинам.
+        # Если это покупка/товар/доставка — ищем именно товары с ценами
         if is_order_request(command):
             shop_queries = build_shop_queries(query)
 
             internet_context += (
-                "Задача: найти реальные варианты в магазинах, желательно доступные в Краснодаре "
-                "или с доставкой в Краснодар. Не выдумывай ссылки. Используй только найденные ссылки.\n\n"
+                "Задача: найти конкретные товары с ценами, желательно доступные в Краснодаре "
+                "или с доставкой в Краснодар. Не использовать обычные ссылки на страницы поиска как результат.\n\n"
             )
 
             for shop_query in shop_queries:
-                search = await web_search(shop_query, max_results=3)
+                search = await web_search(shop_query, max_results=5)
 
                 internet_context += f"\nПоиск: {shop_query}\n"
 
@@ -1418,22 +1560,57 @@ async def background_agent_task(command, session_id, state_snapshot):
                     results_text = format_search_results(search["results"])
                     internet_context += results_text + "\n"
 
+                    candidates = collect_product_candidates(search["results"])
+                    product_candidates.extend(candidates)
+
                     for item in search["results"]:
                         if item.get("url"):
                             links.append(item["url"])
                 else:
                     internet_context += "Ничего полезного не найдено.\n"
 
-            # Добавляем безопасные ссылки на поиск по магазинам.
-            order_links = make_order_links(query)
+            product_candidates = deduplicate_candidates(product_candidates)
+            product_candidates = sorted(
+                product_candidates,
+                key=lambda x: x.get("price", 999999999)
+            )
 
-            internet_context += "\nДополнительные ссылки для самостоятельной проверки:\n"
+            # Если нашли товары с ценами — отправляем именно отсортированную подборку
+            if product_candidates:
+                cheapest_text = format_cheapest_products(
+                    product_candidates,
+                    query,
+                    limit=5
+                )
 
-            for title, url in order_links:
-                internet_context += f"{title}: {url}\n"
-                links.append(url)
+                state["last_result"] = cheapest_text
+                state["last_links"] = [x["url"] for x in product_candidates[:10] if x.get("url")]
 
-        # Если не покупка, но интернет нужен — обычный поиск.
+                await send_telegram_message(cheapest_text, chat_id=recipient_chat_id)
+                save_state(session_id, state)
+                return
+
+            # Если цен не нашли — НЕ отправляем мусорные ссылки на поиск
+            no_price_text = (
+                f"Я поискала варианты по запросу:\n{query}\n\n"
+                f"Но не смогла достоверно вытащить цены из найденных страниц. "
+                f"Поэтому не буду выдавать обычные ссылки на поиск как будто это подборка.\n\n"
+                f"Что можно сделать:\n"
+                f"1. Уточнить запрос: бренд, модель, размер, цвет или бюджет.\n"
+                f"2. Попросить: «найди на Авито в Краснодаре».\n"
+                f"3. Попросить: «найди только новые товары» или «можно б/у».\n\n"
+                f"Пример:\n"
+                f"найди самые дешёвые серые шторы 200 на 250 в Краснодаре\n\n"
+                f"Если хотите, я могу следующим запросом отправить просто ссылки на поиск, "
+                f"но как подборку дешёвых товаров я их считать не буду."
+            )
+
+            state["last_result"] = no_price_text
+            await send_telegram_message(no_price_text, chat_id=recipient_chat_id)
+            save_state(session_id, state)
+            return
+
+        # Если не покупка, но интернет нужен — обычный поиск
         elif needs_web(command):
             search = await web_search(query, max_results=6)
 
@@ -1451,15 +1628,12 @@ async def background_agent_task(command, session_id, state_snapshot):
             f"Задача пользователя: {command}\n\n"
             f"Подготовь результат для Telegram.\n\n"
             f"Правила:\n"
-            f"1. Если это подбор товара — перечисли конкретные варианты из найденных результатов.\n"
-            f"2. Если точных цен нет в найденных сниппетах — честно напиши, что цену надо проверить по ссылке.\n"
+            f"1. Не выдавай обычные ссылки на поиск как готовую подборку.\n"
+            f"2. Если это подбор товара и нет цен — честно скажи, что сравнить по цене не удалось.\n"
             f"3. Не выдумывай магазины, цены и ссылки.\n"
-            f"4. Если пользователь просил самые дешёвые — отсортируй найденные варианты по цене, если цена видна.\n"
-            f"5. Если цена не видна — дай ссылки на поиск в магазинах и объясни, где проверить.\n"
-            f"6. Учитывай Краснодар и доставку в Краснодар.\n"
-            f"7. Если это заказ еды или товара — не оформляй и не оплачивай заказ сам, только дай ссылки.\n"
-            f"8. В конце дай короткий вывод: что выбрать первым.\n"
-            f"9. Тон — практичный, без лишних оправданий.\n"
+            f"4. Учитывай Краснодар и доставку в Краснодар.\n"
+            f"5. Если это заказ еды или товара — не оформляй и не оплачивай заказ сам, только дай ссылки.\n"
+            f"6. В конце дай короткий практический вывод.\n"
         )
 
         answer, state = await ask_deepseek(
@@ -1469,26 +1643,24 @@ async def background_agent_task(command, session_id, state_snapshot):
             long_answer=True
         )
 
-        # Добавляем найденные ссылки в конец, чтобы они точно были.
         unique_links = []
         for link in links:
             if link and link not in unique_links:
                 unique_links.append(link)
 
-        if unique_links:
+        # Для НЕтоварных задач ссылки можно добавлять.
+        if unique_links and not is_order_request(command):
             state["last_links"] = unique_links[-30:]
 
-            links_text = "\n\n🔗 Ссылки для проверки:\n"
-            for i, link in enumerate(unique_links[:15], start=1):
+            links_text = "\n\n🔗 Ссылки:\n"
+            for i, link in enumerate(unique_links[:10], start=1):
                 links_text += f"{i}. {link}\n"
 
-            # Если DeepSeek вдруг не вставил ссылки — добавим сами.
             if "http" not in answer:
                 answer += links_text
 
         state["last_result"] = answer
 
-        # Отправляем файл, если пользователь просил файл/документ/таблицу.
         if wants_file(command):
             filename = "assistant_result.txt"
 
