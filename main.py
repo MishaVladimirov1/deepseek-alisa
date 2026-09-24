@@ -1,5 +1,6 @@
 import os
 import time
+import re
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -9,9 +10,7 @@ app = FastAPI()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
-# Память на сервере.
-# Ключ — session_id Яндекса.
-# Значение — режим, факты и история разговора.
+# Память на сервере по session_id Яндекса
 SERVER_SESSIONS = {}
 
 
@@ -27,6 +26,7 @@ MODES = {
         "max_tokens": 450,
         "temperature": 0.7
     },
+
     "кратко": {
         "title": "Краткий режим",
         "prompt": """
@@ -37,6 +37,7 @@ MODES = {
         "max_tokens": 180,
         "temperature": 0.5
     },
+
     "учитель": {
         "title": "Режим учителя",
         "prompt": """
@@ -48,6 +49,7 @@ MODES = {
         "max_tokens": 550,
         "temperature": 0.6
     },
+
     "эксперт": {
         "title": "Экспертный режим",
         "prompt": """
@@ -55,11 +57,12 @@ MODES = {
 Отвечай точно, структурированно и глубоко.
 Давай практические выводы.
 Если есть спорные моменты, отмечай их.
-Но помни: ответ будет озвучен голосом, поэтому не делай его слишком длинным.
+Помни: ответ будет озвучен голосом, поэтому не делай его слишком длинным.
 """,
         "max_tokens": 650,
         "temperature": 0.5
     },
+
     "джарвис": {
         "title": "Режим Джарвис",
         "prompt": """
@@ -73,6 +76,7 @@ MODES = {
         "max_tokens": 500,
         "temperature": 0.7
     },
+
     "психолог": {
         "title": "Режим психолога",
         "prompt": """
@@ -85,6 +89,7 @@ MODES = {
         "max_tokens": 500,
         "temperature": 0.7
     },
+
     "критик": {
         "title": "Режим критика",
         "prompt": """
@@ -97,6 +102,7 @@ MODES = {
         "max_tokens": 550,
         "temperature": 0.6
     },
+
     "переводчик": {
         "title": "Режим переводчика",
         "prompt": """
@@ -109,6 +115,7 @@ MODES = {
         "max_tokens": 450,
         "temperature": 0.4
     },
+
     "ребёнок": {
         "title": "Режим объяснения для ребёнка",
         "prompt": """
@@ -120,6 +127,7 @@ MODES = {
         "max_tokens": 450,
         "temperature": 0.6
     },
+
     "совет": {
         "title": "Режим совет директоров",
         "prompt": """
@@ -157,10 +165,6 @@ def create_empty_state():
 
 
 def cleanup_old_sessions():
-    """
-    Чистим старые сессии, чтобы память не росла бесконечно.
-    Удаляем сессии старше 6 часов.
-    """
     now = time.time()
     max_age_seconds = 6 * 60 * 60
 
@@ -176,10 +180,6 @@ def cleanup_old_sessions():
 
 
 def get_state(session_id, is_new=False):
-    """
-    Получаем состояние разговора по session_id.
-    Если сессия новая — создаём новую память.
-    """
     cleanup_old_sessions()
 
     if not session_id:
@@ -207,7 +207,6 @@ def make_response(text, end_session=False):
 
     text = str(text).strip()
 
-    # Для озвучивания на колонке лучше не делать огромные ответы.
     if len(text) > 950:
         text = text[:950] + "..."
 
@@ -223,7 +222,7 @@ def make_response(text, end_session=False):
 
 def help_text():
     return """
-Доступные команды:
+Команды:
 режим обычный,
 режим кратко,
 режим учитель,
@@ -235,7 +234,7 @@ def help_text():
 режим ребёнок,
 режим совет.
 
-Также можно сказать:
+Можно сказать:
 запомни, что ...
 что ты помнишь
 очисти память
@@ -246,7 +245,7 @@ def help_text():
 
 def modes_text():
     return """
-Есть режимы:
+Доступные режимы:
 обычный,
 кратко,
 учитель,
@@ -257,29 +256,57 @@ def modes_text():
 переводчик,
 ребёнок,
 совет.
-Например, скажите: режим джарвис.
+Например: режим джарвис.
 """
 
 
+def normalize_text(text):
+    text = text.lower().strip()
+    text = text.replace("ё", "е")
+    text = re.sub(r"[^\w\s]", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
 def normalize_mode_name(text):
+    text = normalize_text(text)
+
     aliases = {
+        "обычный": "обычный",
+        "стандартный": "обычный",
+
+        "кратко": "кратко",
+        "коротко": "кратко",
+        "короткий": "кратко",
+
+        "учитель": "учитель",
         "учителя": "учитель",
         "преподаватель": "учитель",
+
+        "эксперт": "эксперт",
         "эксперта": "эксперт",
+
+        "джарвис": "джарвис",
         "джервис": "джарвис",
         "джарвес": "джарвис",
         "jarvis": "джарвис",
-        "психологический": "психолог",
+
+        "психолог": "психолог",
         "психолога": "психолог",
+        "психологический": "психолог",
+
+        "критик": "критик",
         "критика": "критик",
-        "перевода": "переводчик",
+
+        "переводчик": "переводчик",
         "перевод": "переводчик",
-        "детский": "ребёнок",
+        "перевода": "переводчик",
+
         "ребенок": "ребёнок",
-        "ребёнка": "ребёнок",
         "ребенка": "ребёнок",
-        "коротко": "кратко",
-        "короткий": "кратко",
+        "детский": "ребёнок",
+
+        "совет": "совет",
         "совет директоров": "совет",
         "директоров": "совет"
     }
@@ -287,23 +314,107 @@ def normalize_mode_name(text):
     return aliases.get(text, text)
 
 
+def detect_mode_command(command):
+    """
+    Возвращает название режима, если пользователь просит включить режим.
+    Например:
+    - режим джарвис
+    - включи режим джарвис
+    - переключись на режим критик
+    - джарвис
+    """
+
+    text = normalize_text(command)
+
+    # Если пользователь просто сказал название режима
+    direct_mode = normalize_mode_name(text)
+    if direct_mode in MODES:
+        return direct_mode
+
+    phrases_to_remove = [
+        "включи режим",
+        "включить режим",
+        "переключи режим на",
+        "переключись на режим",
+        "переключись в режим",
+        "поставь режим",
+        "сделай режим",
+        "активируй режим",
+        "запусти режим",
+        "режим"
+    ]
+
+    for phrase in phrases_to_remove:
+        if text.startswith(phrase):
+            mode_part = text.replace(phrase, "", 1).strip()
+            mode_name = normalize_mode_name(mode_part)
+            if mode_name in MODES:
+                return mode_name
+
+    return None
+
+
 def extract_fact(command):
     fact = command.strip()
 
-    replacements = [
-        "запомни, что",
-        "Запомни, что",
+    lower_fact = normalize_text(fact)
+
+    starts = [
         "запомни что",
-        "Запомни что",
-        "запомни",
-        "Запомни"
+        "запомни"
     ]
 
-    for r in replacements:
-        if fact.startswith(r):
-            fact = fact.replace(r, "", 1)
+    for start in starts:
+        if lower_fact.startswith(start):
+            # Удаляем по количеству символов примерно из оригинальной строки проще:
+            words = fact.split()
+            if words and words[0].lower().replace("ё", "е") == "запомни":
+                fact = " ".join(words[1:])
+            break
 
-    return fact.strip(" .,!?")
+    fact = fact.strip(" .,!?:;")
+
+    if fact.lower().startswith("что "):
+        fact = fact[4:].strip(" .,!?:;")
+
+    return fact
+
+
+def try_auto_remember_name(command, state):
+    """
+    Автоматически запоминает имя, если пользователь сказал:
+    - меня зовут Миша
+    - моё имя Миша
+    """
+
+    text = command.strip()
+    low = normalize_text(text)
+
+    name = None
+
+    if low.startswith("меня зовут "):
+        name = text.split(" ", 2)[-1].strip(" .,!?:;")
+
+    elif low.startswith("мое имя "):
+        name = text.split(" ", 2)[-1].strip(" .,!?:;")
+
+    elif low.startswith("моё имя "):
+        name = text.split(" ", 2)[-1].strip(" .,!?:;")
+
+    if name:
+        fact = f"пользователя зовут {name}"
+
+        facts = state.get("facts", [])
+
+        # Не плодим одинаковые факты про имя
+        facts = [f for f in facts if "пользователя зовут" not in f.lower()]
+        facts.append(fact)
+
+        state["facts"] = facts[-20:]
+
+        return name
+
+    return None
 
 
 def build_messages(state, user_text):
@@ -321,7 +432,7 @@ def build_messages(state, user_text):
             memory_text += f"- {fact}\n"
 
     if history:
-        memory_text += "\nУчитывай историю текущего разговора. Если пользователь ранее назвал имя или дал информацию, используй её.\n"
+        memory_text += "\nУчитывай историю текущего разговора.\n"
 
     system_prompt = mode["prompt"] + "\n" + memory_text
 
@@ -332,7 +443,6 @@ def build_messages(state, user_text):
         }
     ]
 
-    # Последние сообщения диалога.
     for item in history[-10:]:
         role = item.get("role")
         content = item.get("content")
@@ -398,7 +508,6 @@ async def ask_deepseek(user_text, state):
         "content": answer
     })
 
-    # Не даём истории разрастаться.
     state["history"] = history[-12:]
 
     print(f"HISTORY LENGTH AFTER: {len(state.get('history', []))}", flush=True)
@@ -412,6 +521,7 @@ async def index():
         "status": "ok",
         "message": "DeepSeek Alice webhook is running",
         "memory": "server session_id memory enabled",
+        "greeting": "Привет!",
         "active_sessions": len(SERVER_SESSIONS),
         "features": [
             "modes",
@@ -435,7 +545,7 @@ async def alice_webhook(request: Request):
 
     request_data = data.get("request", {})
     command = request_data.get("command", "").strip()
-    lower = command.lower()
+    lower = command.lower().strip()
 
     state = get_state(session_id, is_new=is_new)
 
@@ -446,37 +556,30 @@ async def alice_webhook(request: Request):
     print(f"SERVER STATE AT START: {state}", flush=True)
     print(f"ACTIVE SERVER SESSIONS: {len(SERVER_SESSIONS)}", flush=True)
 
-    # Новый запуск навыка
+    # Новый запуск навыка — короткое приветствие
     if is_new or not command:
-        mode_name = state.get("mode", "обычный")
-        greeting = (
-            f"Привет. "
-            f"Режим: {mode_name}. "
-            f"Скажите помощь, чтобы узнать команды."
-        )
-
         save_state(session_id, state)
-        return JSONResponse(make_response(greeting))
+        return JSONResponse(make_response("Привет!"))
 
     # Выход
-    if lower in ["хватит", "стоп", "выход", "закончить", "завершить"]:
+    if normalize_text(command) in ["хватит", "стоп", "выход", "закончить", "завершить"]:
         save_state(session_id, state)
         return JSONResponse(
             make_response("Хорошо, завершаю разговор.", end_session=True)
         )
 
     # Помощь
-    if lower in ["помощь", "что ты умеешь", "команды", "список команд"]:
+    if normalize_text(command) in ["помощь", "что ты умеешь", "команды", "список команд"]:
         save_state(session_id, state)
         return JSONResponse(make_response(help_text()))
 
     # Список режимов
-    if lower in ["режимы", "какие есть режимы", "список режимов"]:
+    if normalize_text(command) in ["режимы", "какие есть режимы", "список режимов"]:
         save_state(session_id, state)
         return JSONResponse(make_response(modes_text()))
 
     # Текущий режим
-    if lower in ["какой режим", "какой сейчас режим", "текущий режим"]:
+    if normalize_text(command) in ["какой режим", "какой сейчас режим", "текущий режим"]:
         mode_name = state.get("mode", "обычный")
         title = MODES.get(mode_name, MODES["обычный"])["title"]
 
@@ -486,30 +589,25 @@ async def alice_webhook(request: Request):
         )
 
     # Переключение режима
-    if lower.startswith("режим "):
-        requested_mode = lower.replace("режим ", "").strip()
-        requested_mode = normalize_mode_name(requested_mode)
+    detected_mode = detect_mode_command(command)
 
-        if requested_mode in MODES:
-            state["mode"] = requested_mode
-            title = MODES[requested_mode]["title"]
-
-            if requested_mode == "джарвис":
-                answer = "Режим Джарвис активирован. Слушаю вас."
-            else:
-                answer = f"{title} включён."
-
-            save_state(session_id, state)
-            print(f"MODE SAVED: {state['mode']}", flush=True)
-            return JSONResponse(make_response(answer))
+    if detected_mode:
+        state["mode"] = detected_mode
+        title = MODES[detected_mode]["title"]
 
         save_state(session_id, state)
-        return JSONResponse(
-            make_response("Такого режима нет. Скажите: режимы, чтобы услышать список.")
-        )
+
+        print(f"MODE SAVED: {state['mode']}", flush=True)
+
+        if detected_mode == "джарвис":
+            return JSONResponse(make_response("Режим Джарвис активирован."))
+        elif detected_mode == "совет":
+            return JSONResponse(make_response("Совет директоров собран."))
+        else:
+            return JSONResponse(make_response(f"{title} включён."))
 
     # Запомнить факт
-    if lower.startswith("запомни"):
+    if normalize_text(command).startswith("запомни"):
         fact = extract_fact(command)
 
         if not fact:
@@ -529,8 +627,17 @@ async def alice_webhook(request: Request):
             make_response(f"Запомнила: {fact}.")
         )
 
+    # Автоматически запоминаем имя
+    remembered_name = try_auto_remember_name(command, state)
+
+    if remembered_name:
+        save_state(session_id, state)
+        return JSONResponse(
+            make_response(f"Приятно познакомиться, {remembered_name}.")
+        )
+
     # Что помнишь?
-    if lower in [
+    if normalize_text(command) in [
         "что ты помнишь",
         "что ты обо мне помнишь",
         "что ты запомнила",
@@ -548,10 +655,9 @@ async def alice_webhook(request: Request):
         return JSONResponse(make_response(text))
 
     # Очистка памяти
-    if lower in [
+    if normalize_text(command) in [
         "очисти память",
         "сотри память",
-        "забудь всё",
         "забудь все",
         "очистить память"
     ]:
@@ -562,7 +668,7 @@ async def alice_webhook(request: Request):
         return JSONResponse(make_response("Память очищена."))
 
     # Проверка памяти
-    if lower in [
+    if normalize_text(command) in [
         "проверка памяти",
         "проверь память",
         "сколько сообщений в памяти"
@@ -573,9 +679,9 @@ async def alice_webhook(request: Request):
 
         text = (
             f"Память работает. "
-            f"В истории сейчас сообщений: {history_count}. "
-            f"Запомненных фактов: {facts_count}. "
-            f"Текущий режим: {mode_name}."
+            f"В истории сообщений: {history_count}. "
+            f"Фактов: {facts_count}. "
+            f"Режим: {mode_name}."
         )
 
         save_state(session_id, state)
