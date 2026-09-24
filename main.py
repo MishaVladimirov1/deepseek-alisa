@@ -22,9 +22,6 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 TAVILY_API_URL = "https://api.tavily.com/search"
 
-# Необязательно.
-# Потом можно добавить в Render переменную:
-# TELEGRAM_CONTACTS_JSON={"жене":"123456789","маме":"987654321"}
 TELEGRAM_CONTACTS_JSON = os.getenv("TELEGRAM_CONTACTS_JSON", "{}")
 
 try:
@@ -35,11 +32,8 @@ except Exception:
     TELEGRAM_CONTACTS = {}
 
 
-# Память текущих сессий навыка.
 SERVER_SESSIONS = {}
 
-# Простая глобальная память.
-# Важно: на бесплатном Render она может сбрасываться после перезапуска сервера.
 GLOBAL_PROFILE = {
     "facts": [
         "пользователь находится в Краснодаре",
@@ -57,13 +51,12 @@ MODES = {
 Ты голосовой AI-ассистент пользователя внутри навыка Алисы.
 Отвечай по-русски, понятно, дружелюбно и не слишком длинно.
 Если вопрос простой — отвечай сам.
-Если в контексте есть данные из интернета — используй их.
+Если есть данные из интернета — используй их.
 Не называй себя ChatGPT.
 """,
         "max_tokens": 500,
         "temperature": 0.7
     },
-
     "кратко": {
         "title": "Краткий режим",
         "prompt": """
@@ -73,20 +66,17 @@ MODES = {
         "max_tokens": 220,
         "temperature": 0.5
     },
-
     "джарвис": {
         "title": "Режим Джарвис",
         "prompt": """
 Ты персональный ассистент в стиле умного дворецкого и аналитика.
 Стиль: спокойно, чётко, уверенно, немного кинематографично, но без перебора.
-Обращайся уважительно.
 Отвечай по-русски.
 Если пользователь просит сделать действие — помогай выполнить его через доступные инструменты.
 """,
         "max_tokens": 550,
         "temperature": 0.7
     },
-
     "исследователь": {
         "title": "Режим исследователя",
         "prompt": """
@@ -98,19 +88,17 @@ MODES = {
         "max_tokens": 750,
         "temperature": 0.5
     },
-
     "оператор": {
         "title": "Режим оператора",
         "prompt": """
 Ты режим оператора.
 Говори очень кратко.
 Если задача выполнена, отвечай: сделано, отправила, нашла, подготовила.
-Подробности лучше отправлять в Telegram, если это возможно.
+Подробности лучше отправлять в Telegram.
 """,
         "max_tokens": 250,
         "temperature": 0.4
     },
-
     "секретарь": {
         "title": "Режим секретаря",
         "prompt": """
@@ -122,7 +110,6 @@ MODES = {
         "max_tokens": 700,
         "temperature": 0.6
     },
-
     "покупки": {
         "title": "Режим покупок",
         "prompt": """
@@ -130,13 +117,11 @@ MODES = {
 Помогай искать товары, сравнивать варианты, проверять риски, составлять список.
 Учитывай город Краснодар и доставку в Краснодар.
 Не оформляй и не оплачивай заказы самостоятельно.
-Всегда предлагай пользователю самому подтвердить покупку.
 Не выдумывай цены и ссылки.
 """,
         "max_tokens": 750,
         "temperature": 0.5
     },
-
     "дом": {
         "title": "Режим дом",
         "prompt": """
@@ -147,7 +132,6 @@ MODES = {
         "max_tokens": 650,
         "temperature": 0.6
     },
-
     "критик": {
         "title": "Режим критика",
         "prompt": """
@@ -159,7 +143,6 @@ MODES = {
         "max_tokens": 550,
         "temperature": 0.6
     },
-
     "учитель": {
         "title": "Режим учителя",
         "prompt": """
@@ -174,7 +157,7 @@ MODES = {
 
 
 # ---------------------------------------------------------
-# Базовые функции
+# БАЗА
 # ---------------------------------------------------------
 
 def normalize_text(text):
@@ -240,7 +223,6 @@ def make_response(text, end_session=False):
 
     text = str(text).strip()
 
-    # Для колонки лучше коротко.
     if len(text) > 950:
         text = text[:950] + "..."
 
@@ -255,7 +237,7 @@ def make_response(text, end_session=False):
 
 
 # ---------------------------------------------------------
-# Режимы
+# РЕЖИМЫ
 # ---------------------------------------------------------
 
 def normalize_mode_name(text):
@@ -354,16 +336,10 @@ def help_text():
 
 
 # ---------------------------------------------------------
-# Telegram
+# TELEGRAM
 # ---------------------------------------------------------
 
 def get_telegram_recipient_chat_id(command=None):
-    """
-    По умолчанию отправляем владельцу.
-    Если в команде есть 'жене', 'маме' и т.п.,
-    пробуем найти chat_id в TELEGRAM_CONTACTS_JSON или GLOBAL_PROFILE.
-    """
-
     default_chat_id = TELEGRAM_CHAT_ID
 
     if not command:
@@ -374,8 +350,8 @@ def get_telegram_recipient_chat_id(command=None):
     contacts = {}
     contacts.update(GLOBAL_PROFILE.get("telegram_contacts", {}))
 
-    # Нормализуем ключи.
     normalized_contacts = {}
+
     for name, chat_id in contacts.items():
         normalized_contacts[normalize_text(name)] = str(chat_id)
 
@@ -383,7 +359,6 @@ def get_telegram_recipient_chat_id(command=None):
         if name and name in text:
             return chat_id
 
-    # Частые варианты.
     if "жене" in text or "жена" in text or "супруге" in text:
         for key in ["жене", "жена", "супруга", "супруге"]:
             if key in normalized_contacts:
@@ -482,16 +457,15 @@ async def send_telegram_file(filename, content, chat_id=None):
 
 
 # ---------------------------------------------------------
-# Интернет-поиск
+# ПОИСК И ТОВАРЫ
 # ---------------------------------------------------------
 
 def build_shop_queries(query):
     """
-    Делаем запросы так, чтобы найти именно товары с ценами,
-    а не просто страницы поиска.
+    Поисковые запросы именно под товары с ценами.
     """
 
-    base = query
+    base = clean_query_for_search(query)
 
     queries = [
         f"{base} купить цена",
@@ -499,29 +473,28 @@ def build_shop_queries(query):
         f"{base} купить Краснодар",
         f"{base} доставка Краснодар",
 
-        f"{base} site:market.yandex.ru/product",
+        f"{base} site:market.yandex.ru/product цена",
         f"{base} site:market.yandex.ru цена",
 
-        f"{base} site:dns-shop.ru/product",
+        f"{base} site:dns-shop.ru/product цена",
         f"{base} site:dns-shop.ru цена",
 
-        f"{base} site:citilink.ru/product",
+        f"{base} site:citilink.ru/product цена",
         f"{base} site:citilink.ru цена",
 
-        f"{base} site:ozon.ru/product",
+        f"{base} site:ozon.ru/product цена",
         f"{base} site:ozon.ru цена",
 
-        f"{base} site:wildberries.ru/catalog",
+        f"{base} site:wildberries.ru/catalog цена",
         f"{base} site:wildberries.ru цена",
 
-        f"{base} site:avito.ru/krasnodar",
+        f"{base} site:avito.ru/krasnodar цена",
         f"{base} Авито Краснодар цена"
     ]
 
-    # Для дома/мебели добавляем магазины дома
     low = normalize_text(base)
 
-    if any(w in low for w in ["шторы", "тюль", "занавески", "карниз", "ковер", "мебель"]):
+    if any(w in low for w in ["шторы", "тюль", "занавески", "карниз", "ковер", "ковёр", "мебель"]):
         queries.extend([
             f"{base} site:hoff.ru цена",
             f"{base} site:lemanapro.ru цена",
@@ -529,10 +502,11 @@ def build_shop_queries(query):
         ])
 
     return queries
-    async def web_search(query, max_results=5):
+
+
+async def web_search(query, max_results=5):
     """
     Интернет-поиск через Tavily.
-    Возвращает список результатов: title, url, content.
     """
 
     api_key = TAVILY_API_KEY or os.getenv("TAVILY_API_KEY")
@@ -542,7 +516,7 @@ def build_shop_queries(query):
         print("TAVILY_API_KEY NOT CONFIGURED", flush=True)
         return {
             "ok": False,
-            "error": "TAVILY_API_KEY не настроен в Render.",
+            "error": "TAVILY_API_KEY не настроен.",
             "results": []
         }
 
@@ -599,188 +573,13 @@ def build_shop_queries(query):
 
     except Exception as e:
         print(f"WEB SEARCH ERROR: {str(e)}", flush=True)
-
         return {
             "ok": False,
             "error": str(e),
             "results": []
         }
-def extract_price_from_text(text):
-    """
-    Пытается найти цену в тексте.
-    Возвращает число в рублях или None.
-    """
-
-    if not text:
-        return None
-
-    text = str(text)
-    text = text.replace("\u202f", " ")
-    text = text.replace("\xa0", " ")
-
-    patterns = [
-        r"(\d{1,3}(?:[\s\.]\d{3})+)\s*(?:₽|руб|р)",
-        r"(\d{4,7})\s*(?:₽|руб|р)",
-        r"от\s*(\d{1,3}(?:[\s\.]\d{3})+)",
-        r"от\s*(\d{4,7})"
-    ]
-
-    prices = []
-
-    for pattern in patterns:
-        matches = re.findall(pattern, text, flags=re.IGNORECASE)
-
-        for match in matches:
-            raw = str(match)
-            raw = raw.replace(" ", "").replace(".", "")
-
-            try:
-                price = int(raw)
-
-                # Отсекаем мусорные числа
-                if 50 <= price <= 2_000_000:
-                    prices.append(price)
-            except Exception:
-                pass
-
-    if not prices:
-        return None
-
-    return min(prices)
 
 
-def clean_product_title(title):
-    title = str(title or "").strip()
-
-    # Убираем мусор
-    title = re.sub(r"\s+", " ", title)
-    title = title.replace("— купить", "")
-    title = title.replace("- купить", "")
-    title = title.strip(" -—|")
-
-    return title
-
-
-def is_generic_search_url(url):
-    """
-    Проверяет, является ли ссылка просто страницей поиска.
-    Такие ссылки нельзя выдавать как найденный товар.
-    """
-
-    if not url:
-        return True
-
-    url_low = url.lower()
-
-    bad_parts = [
-        "/search",
-        "search?",
-        "text=",
-        "q=",
-        "query=",
-        "catalog/0/search",
-        "поиск"
-    ]
-
-    return any(part in url_low for part in bad_parts)
-
-
-def collect_product_candidates(results):
-    """
-    Превращает результаты поиска в список кандидатов:
-    title, url, price, snippet.
-    Берём только то, где есть цена и нормальная ссылка.
-    """
-
-    candidates = []
-
-    for item in results:
-        title = item.get("title", "")
-        url = item.get("url", "")
-        content = item.get("content", "")
-
-        combined_text = f"{title}\n{content}"
-
-        price = extract_price_from_text(combined_text)
-
-        # Если цены нет — это не кандидат на "самый дешёвый"
-        if price is None:
-            continue
-
-        # Если это просто ссылка на поиск — не считаем товаром
-        if is_generic_search_url(url):
-            continue
-
-        candidates.append({
-            "title": clean_product_title(title),
-            "url": url,
-            "price": price,
-            "content": content[:500]
-        })
-
-    return candidates
-
-
-def deduplicate_candidates(candidates):
-    """
-    Убирает дубликаты по ссылке и похожему названию.
-    """
-
-    seen_urls = set()
-    unique = []
-
-    for item in candidates:
-        url = item.get("url", "")
-
-        if not url:
-            continue
-
-        if url in seen_urls:
-            continue
-
-        seen_urls.add(url)
-        unique.append(item)
-
-    return unique
-
-
-def format_cheapest_products(candidates, query, limit=5):
-    """
-    Формирует нормальное сообщение с самыми дешёвыми вариантами.
-    """
-
-    if not candidates:
-        return ""
-
-    candidates = deduplicate_candidates(candidates)
-    candidates = sorted(candidates, key=lambda x: x.get("price", 999999999))
-    candidates = candidates[:limit]
-
-    text = f"🛒 Самые дешёвые найденные варианты по запросу:\n{query}\n\n"
-
-    for i, item in enumerate(candidates, start=1):
-        title = item.get("title", "Товар")
-        price = item.get("price")
-        url = item.get("url")
-
-        text += f"{i}. {title}\n"
-        text += f"Цена в найденных данных: {price:,} ₽\n".replace(",", " ")
-        text += f"Ссылка: {url}\n\n"
-
-    best = candidates[0]
-
-    text += (
-        f"✅ Самый дешёвый из найденных вариантов:\n"
-        f"{best.get('title')}\n"
-        f"Цена: {best.get('price'):,} ₽\n"
-        f"{best.get('url')}\n\n"
-    ).replace(",", " ")
-
-    text += (
-        "Важно: цена могла измениться. Перед покупкой проверьте цену, наличие, продавца и доставку в Краснодар."
-    )
-
-    return text
 def format_search_results(results):
     if not results:
         return "Ничего не найдено."
@@ -805,8 +604,167 @@ def format_search_results(results):
     return text.strip()
 
 
+def extract_price_from_text(text):
+    """
+    Пытается найти цену в тексте.
+    Возвращает число в рублях или None.
+    """
+
+    if not text:
+        return None
+
+    text = str(text)
+    text = text.replace("\u202f", " ")
+    text = text.replace("\xa0", " ")
+
+    patterns = [
+        r"(\d{1,3}(?:[\s\.]\d{3})+)\s*(?:₽|руб|р\b)",
+        r"(\d{4,7})\s*(?:₽|руб|р\b)",
+        r"от\s*(\d{1,3}(?:[\s\.]\d{3})+)",
+        r"от\s*(\d{4,7})"
+    ]
+
+    prices = []
+
+    for pattern in patterns:
+        matches = re.findall(pattern, text, flags=re.IGNORECASE)
+
+        for match in matches:
+            raw = str(match)
+            raw = raw.replace(" ", "").replace(".", "")
+
+            try:
+                price = int(raw)
+
+                if 50 <= price <= 2_000_000:
+                    prices.append(price)
+            except Exception:
+                pass
+
+    if not prices:
+        return None
+
+    return min(prices)
+
+
+def clean_product_title(title):
+    title = str(title or "").strip()
+    title = re.sub(r"\s+", " ", title)
+    title = title.replace("— купить", "")
+    title = title.replace("- купить", "")
+    title = title.strip(" -—|")
+    return title
+
+
+def is_generic_search_url(url):
+    """
+    Обычные ссылки на поиск не считаем товаром.
+    """
+
+    if not url:
+        return True
+
+    url_low = url.lower()
+
+    bad_parts = [
+        "/search",
+        "search?",
+        "text=",
+        "q=",
+        "query=",
+        "catalog/0/search",
+        "поиск"
+    ]
+
+    return any(part in url_low for part in bad_parts)
+
+
+def collect_product_candidates(results):
+    candidates = []
+
+    for item in results:
+        title = item.get("title", "")
+        url = item.get("url", "")
+        content = item.get("content", "")
+
+        combined_text = f"{title}\n{content}"
+
+        price = extract_price_from_text(combined_text)
+
+        if price is None:
+            continue
+
+        if is_generic_search_url(url):
+            continue
+
+        candidates.append({
+            "title": clean_product_title(title),
+            "url": url,
+            "price": price,
+            "content": content[:500]
+        })
+
+    return candidates
+
+
+def deduplicate_candidates(candidates):
+    seen_urls = set()
+    unique = []
+
+    for item in candidates:
+        url = item.get("url", "")
+
+        if not url:
+            continue
+
+        if url in seen_urls:
+            continue
+
+        seen_urls.add(url)
+        unique.append(item)
+
+    return unique
+
+
+def format_cheapest_products(candidates, query, limit=5):
+    if not candidates:
+        return ""
+
+    candidates = deduplicate_candidates(candidates)
+    candidates = sorted(candidates, key=lambda x: x.get("price", 999999999))
+    candidates = candidates[:limit]
+
+    text = f"🛒 Самые дешёвые найденные варианты:\n{query}\n\n"
+
+    for i, item in enumerate(candidates, start=1):
+        title = item.get("title", "Товар")
+        price = item.get("price")
+        url = item.get("url")
+
+        price_text = f"{price:,}".replace(",", " ")
+
+        text += f"{i}. {title}\n"
+        text += f"Цена в найденных данных: {price_text} ₽\n"
+        text += f"Ссылка: {url}\n\n"
+
+    best = candidates[0]
+    best_price = f"{best.get('price'):,}".replace(",", " ")
+
+    text += "✅ Самый дешёвый из найденных вариантов:\n"
+    text += f"{best.get('title')}\n"
+    text += f"Цена: {best_price} ₽\n"
+    text += f"{best.get('url')}\n\n"
+
+    text += (
+        "Важно: цена могла измениться. Перед покупкой проверьте цену, наличие, продавца "
+        "и доставку в Краснодар."
+    )
+
+    return text
+
+
 # ---------------------------------------------------------
-# DeepSeek
+# DEEPSEEK
 # ---------------------------------------------------------
 
 def build_messages(state, user_text, internet_context=""):
@@ -833,31 +791,23 @@ def build_messages(state, user_text, internet_context=""):
 
     system_prompt = mode["prompt"] + """
 
-У тебя есть внешние инструменты, которые выполняет сервер:
+У тебя есть внешние инструменты:
 - интернет-поиск;
-- отправка сообщений в Telegram;
-- отправка файлов;
-- создание ссылок на карты;
-- подготовка ссылок для заказа товаров и еды.
+- Telegram;
+- файлы;
+- карты;
+- подготовка ссылок для покупки.
 
-Важные правила:
-1. Не выдумывай ссылки. Используй только ссылки из поиска или явно созданные ссылки на карты/магазины.
-2. Не выдумывай точные цены, если их нет в найденных данных.
-3. Если цена не видна — напиши: цену нужно проверить по ссылке.
-4. Если пользователь просит отправить что-то на телефон, результат должен быть пригоден для Telegram.
-5. Не оформляй и не оплачивай заказы самостоятельно.
-6. Для покупок, еды и доставки готовь варианты и ссылки, но финальное подтверждение делает пользователь.
-7. Если данных мало, честно скажи об этом.
-8. Для голосового ответа отвечай коротко, а подробности лучше отправлять в Telegram.
-9. Для покупок учитывай Краснодар и доставку в Краснодар.
+Правила:
+1. Не выдумывай ссылки.
+2. Не выдумывай точные цены.
+3. Если цена не видна — скажи, что цену нужно проверить по ссылке.
+4. Не оформляй и не оплачивай заказы самостоятельно.
+5. Для покупок учитывай Краснодар.
+6. Если результат длинный — кратко для голоса, подробно в Telegram.
 """ + memory_text
 
-    messages = [
-        {
-            "role": "system",
-            "content": system_prompt
-        }
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
 
     for item in history[-10:]:
         role = item.get("role")
@@ -942,7 +892,7 @@ async def ask_deepseek(user_text, state, internet_context="", long_answer=False)
 
 
 # ---------------------------------------------------------
-# Определение намерений
+# НАМЕРЕНИЯ
 # ---------------------------------------------------------
 
 def wants_telegram(command):
@@ -960,8 +910,6 @@ def wants_telegram(command):
         "сохрани мне",
         "ссылку мне",
         "ссылки мне",
-
-        # Чтобы подборки товаров чаще уходили в Telegram.
         "подбери",
         "подобрать",
         "выбери",
@@ -1000,7 +948,6 @@ def needs_web(command):
     text = normalize_text(command)
 
     words = [
-        # общее
         "найди",
         "поищи",
         "посмотри",
@@ -1014,8 +961,6 @@ def needs_web(command):
         "новости",
         "курс",
         "погода",
-
-        # покупки
         "цена",
         "цены",
         "стоит",
@@ -1044,8 +989,6 @@ def needs_web(command):
         "скидки",
         "акции",
         "отзывы",
-
-        # доставка/еда
         "доставка",
         "заказать",
         "закажи",
@@ -1056,8 +999,6 @@ def needs_web(command):
         "суши",
         "роллы",
         "продукты",
-
-        # места
         "адрес",
         "рядом",
         "ближайший",
@@ -1065,8 +1006,6 @@ def needs_web(command):
         "маршрут",
         "карта",
         "аптека",
-
-        # товары для дома
         "шторы",
         "штора",
         "занавески",
@@ -1079,8 +1018,6 @@ def needs_web(command):
         "ковёр",
         "постельное",
         "полотенца",
-
-        # отправка ссылок
         "ссылка",
         "ссылки"
     ]
@@ -1126,8 +1063,6 @@ def is_order_request(command):
         "роллы",
         "бургер",
         "продукты",
-
-        # бытовые покупки
         "шторы",
         "штора",
         "занавески",
@@ -1139,7 +1074,15 @@ def is_order_request(command):
         "лампа",
         "светильник",
         "постельное",
-        "полотенца"
+        "полотенца",
+        "rtx",
+        "видеокарта",
+        "клавиатура",
+        "мышь",
+        "ноутбук",
+        "телефон",
+        "смартфон",
+        "монитор"
     ]
 
     return any(w in text for w in words)
@@ -1159,13 +1102,8 @@ def is_phone_call_request(command):
 
 
 def shopping_needs_clarification(command):
-    """
-    Проверяет, нужно ли задать уточняющий вопрос по покупке.
-    Например, для штор желательно знать тип, размер, цвет.
-    """
     text = normalize_text(command)
 
-    # Шторы
     if any(w in text for w in ["шторы", "штора", "занавески", "тюль"]):
         has_type = any(w in text for w in [
             "блэкаут",
@@ -1214,18 +1152,15 @@ def shopping_needs_clarification(command):
             "кремовые"
         ])
 
-        # Если вообще мало данных — спрашиваем.
         if not has_type and not has_size and not has_color:
             return (
                 "Какие шторы нужны: тюль, блэкаут, рулонные или обычные? "
                 "И какой примерно размер?"
             )
 
-        # Если есть тип, но нет размера.
         if has_type and not has_size:
             return "Какой примерно размер штор: ширина и высота?"
 
-    # Мебель
     if any(w in text for w in ["диван", "кровать", "стол", "шкаф", "комод"]):
         has_size = any(w in text for w in ["размер", "ширина", "высота", "длина", "см", "метр"])
         has_budget = any(w in text for w in ["до ", "руб", "тысяч", "бюджет"])
@@ -1233,7 +1168,6 @@ def shopping_needs_clarification(command):
         if not has_size and not has_budget:
             return "Уточните размер и примерный бюджет."
 
-    # Одежда/обувь
     if any(w in text for w in ["куртку", "куртка", "джинсы", "футболку", "обувь", "кроссовки"]):
         has_size = any(w in text for w in ["размер", "s", "m", "l", "xl", "42", "43", "44", "45"])
 
@@ -1241,6 +1175,60 @@ def shopping_needs_clarification(command):
             return "Какой размер нужен?"
 
     return None
+
+
+def clean_query_for_search(query):
+    text = str(query or "").strip()
+
+    replacements = [
+        "и отправь в телеграм",
+        "отправь в телеграм",
+        "скинь в телеграм",
+        "пришли в телеграм",
+        "и скинь в телеграм",
+        "и отправь на телефон",
+        "скинь на телефон",
+        "отправь на телефон",
+        "найди",
+        "поищи",
+        "посмотри",
+        "подбери",
+        "выбери",
+        "самый дешевый",
+        "самая дешевая",
+        "самые дешевые",
+        "дешевый",
+        "дешевая",
+        "дешевые",
+        "недорогой",
+        "недорогая",
+        "недорогие",
+        "товар"
+    ]
+
+    low = normalize_text(text)
+
+    for r in replacements:
+        low_r = normalize_text(r)
+        if low_r in low:
+            pattern = re.compile(re.escape(r), re.IGNORECASE)
+            text = pattern.sub(" ", text)
+
+    text = re.sub(r"\s+", " ", text).strip(" .,!?:;")
+
+    fixed = normalize_text(text)
+
+    if "логитеч" in fixed:
+        text = re.sub("логитеч", "Logitech", text, flags=re.IGNORECASE)
+
+    if "краснодар" not in normalize_text(text):
+        if any(w in normalize_text(text) for w in [
+            "шторы", "клавиатура", "мышь", "rtx", "видеокарта",
+            "монитор", "ноутбук", "телефон", "смартфон", "мебель"
+        ]):
+            text += " Краснодар"
+
+    return text.strip()
 
 
 def extract_search_query(command):
@@ -1280,41 +1268,11 @@ def extract_search_query(command):
     if not text:
         text = command.strip()
 
-    # По умолчанию добавляем Краснодар, если это покупка/место/доставка.
-    low2 = normalize_text(text)
-
-    shopping_words = [
-        "шторы",
-        "штора",
-        "занавески",
-        "тюль",
-        "товар",
-        "купить",
-        "магазин",
-        "доставка",
-        "цена",
-        "дешевые",
-        "недорогие",
-        "мебель",
-        "еда",
-        "пицца",
-        "суши",
-        "продукты",
-        "ковер",
-        "ковёр",
-        "лампа",
-        "светильник"
-    ]
-
-    if any(w in low2 for w in shopping_words):
-        if "краснодар" not in low2:
-            text = text + " Краснодар"
-
-    return text
+    return clean_query_for_search(text)
 
 
 # ---------------------------------------------------------
-# Карты, заказы, телефон
+# КАРТЫ, ЗАКАЗЫ, ТЕЛЕФОН
 # ---------------------------------------------------------
 
 def make_map_links(query):
@@ -1337,7 +1295,6 @@ def make_order_links(query):
     links.append(("Hoff", f"https://hoff.ru/search/?q={encoded}"))
     links.append(("Лемана ПРО", f"https://lemanapro.ru/search/?q={encoded}"))
 
-    # Для еды и продуктов.
     links.append(("Яндекс Еда", "https://eda.yandex.ru/"))
     links.append(("Купер", "https://kuper.ru/"))
     links.append(("Самокат", "https://samokat.ru/"))
@@ -1364,12 +1321,6 @@ def extract_phone_number(text):
 
 
 def save_contact_from_command(command):
-    """
-    Пример:
-    запомни телефон мамы +79991234567
-    запомни номер папы 89991234567
-    """
-
     text = command.strip()
     low = normalize_text(text)
 
@@ -1400,15 +1351,6 @@ def save_contact_from_command(command):
 
 
 def save_telegram_contact_from_command(command):
-    """
-    Пример:
-    запомни телеграм жены 123456789
-    запомни telegram мамы 987654321
-
-    Важно: человек должен сам нажать Start у вашего Telegram-бота,
-    иначе бот не сможет ему писать.
-    """
-
     text = command.strip()
     low = normalize_text(text)
 
@@ -1440,11 +1382,6 @@ def save_telegram_contact_from_command(command):
 
 
 async def handle_call_request(command):
-    """
-    Реальный звонок через навык невозможен.
-    Поэтому отправляем ссылку tel: в Telegram.
-    """
-
     text = normalize_text(command)
 
     number = extract_phone_number(command)
@@ -1495,7 +1432,7 @@ async def handle_call_request(command):
 
 
 # ---------------------------------------------------------
-# Списки и память
+# ПАМЯТЬ И СПИСКИ
 # ---------------------------------------------------------
 
 def extract_fact(command):
@@ -1583,15 +1520,14 @@ def add_to_shopping_list(command, state):
 
 
 # ---------------------------------------------------------
-# Фоновый агент для Telegram
+# ФОНОВЫЙ АГЕНТ
 # ---------------------------------------------------------
 
 async def background_agent_task(command, session_id, state_snapshot):
     """
-    Долгие задачи выполняем в фоне:
-    поиск, анализ, файл, отправка в Telegram.
-    Для товаров теперь пытаемся выбрать самые дешёвые реальные варианты,
-    а не просто отправлять ссылки на поиск.
+    Долгие задачи выполняем в фоне.
+    Для товаров пытаемся найти конкретные товары с ценами.
+    Обычные поисковые ссылки не выдаём как подборку.
     """
 
     try:
@@ -1604,7 +1540,6 @@ async def background_agent_task(command, session_id, state_snapshot):
         links = []
         product_candidates = []
 
-        # Карты
         if is_map_request(command):
             yandex, google = make_map_links(query)
 
@@ -1618,7 +1553,6 @@ async def background_agent_task(command, session_id, state_snapshot):
             links.extend([yandex, google])
             internet_context += map_text + "\n\n"
 
-        # Если это покупка/товар/доставка — ищем именно товары с ценами
         if is_order_request(command):
             shop_queries = build_shop_queries(query)
 
@@ -1651,7 +1585,6 @@ async def background_agent_task(command, session_id, state_snapshot):
                 key=lambda x: x.get("price", 999999999)
             )
 
-            # Если нашли товары с ценами — отправляем именно отсортированную подборку
             if product_candidates:
                 cheapest_text = format_cheapest_products(
                     product_candidates,
@@ -1666,19 +1599,18 @@ async def background_agent_task(command, session_id, state_snapshot):
                 save_state(session_id, state)
                 return
 
-            # Если цен не нашли — НЕ отправляем мусорные ссылки на поиск
             no_price_text = (
                 f"Я поискала варианты по запросу:\n{query}\n\n"
                 f"Но не смогла достоверно вытащить цены из найденных страниц. "
                 f"Поэтому не буду выдавать обычные ссылки на поиск как будто это подборка.\n\n"
                 f"Что можно сделать:\n"
                 f"1. Уточнить запрос: бренд, модель, размер, цвет или бюджет.\n"
-                f"2. Попросить: «найди на Авито в Краснодаре».\n"
-                f"3. Попросить: «найди только новые товары» или «можно б/у».\n\n"
+                f"2. Попросить поискать на конкретной площадке, например Авито Краснодар.\n"
+                f"3. Попросить: только новые товары или можно б/у.\n\n"
                 f"Пример:\n"
-                f"найди самые дешёвые серые шторы 200 на 250 в Краснодаре\n\n"
+                f"найди самую дешёвую клавиатуру Logitech K380 в Краснодаре\n\n"
                 f"Если хотите, я могу следующим запросом отправить просто ссылки на поиск, "
-                f"но как подборку дешёвых товаров я их считать не буду."
+                f"но подборкой дешёвых товаров я их считать не буду."
             )
 
             state["last_result"] = no_price_text
@@ -1686,7 +1618,6 @@ async def background_agent_task(command, session_id, state_snapshot):
             save_state(session_id, state)
             return
 
-        # Если не покупка, но интернет нужен — обычный поиск
         elif needs_web(command):
             search = await web_search(query, max_results=6)
 
@@ -1708,7 +1639,7 @@ async def background_agent_task(command, session_id, state_snapshot):
             f"2. Если это подбор товара и нет цен — честно скажи, что сравнить по цене не удалось.\n"
             f"3. Не выдумывай магазины, цены и ссылки.\n"
             f"4. Учитывай Краснодар и доставку в Краснодар.\n"
-            f"5. Если это заказ еды или товара — не оформляй и не оплачивай заказ сам, только дай ссылки.\n"
+            f"5. Если это заказ еды или товара — не оформляй и не оплачивай заказ сам.\n"
             f"6. В конце дай короткий практический вывод.\n"
         )
 
@@ -1724,7 +1655,6 @@ async def background_agent_task(command, session_id, state_snapshot):
             if link and link not in unique_links:
                 unique_links.append(link)
 
-        # Для НЕтоварных задач ссылки можно добавлять.
         if unique_links and not is_order_request(command):
             state["last_links"] = unique_links[-30:]
 
@@ -1764,7 +1694,7 @@ async def background_agent_task(command, session_id, state_snapshot):
 
 
 # ---------------------------------------------------------
-# Главные endpoints
+# ENDPOINTS
 # ---------------------------------------------------------
 
 @app.get("/")
@@ -1786,6 +1716,7 @@ async def index():
             "maps links",
             "safe order preparation",
             "shopping clarification through voice",
+            "cheapest product extraction",
             "Krasnodar shopping context",
             "session memory",
             "modes",
@@ -1817,22 +1748,18 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
     print(f"COMMAND: {command}", flush=True)
     print(f"STATE: {state}", flush=True)
 
-    # Короткое приветствие.
     if is_new or not command:
         save_state(session_id, state)
         return JSONResponse(make_response("Привет!"))
 
-    # Выход.
     if text in ["хватит", "стоп", "выход", "закончить", "завершить"]:
         save_state(session_id, state)
         return JSONResponse(make_response("Хорошо.", end_session=True))
 
-    # Помощь.
     if text in ["помощь", "что ты умеешь", "команды"]:
         save_state(session_id, state)
         return JSONResponse(make_response(help_text()))
 
-    # Если ранее был задан уточняющий вопрос — объединяем старую задачу и новый ответ.
     pending_task = state.get("pending_task")
 
     if pending_task and pending_task.get("type") == "shopping_clarification":
@@ -1846,7 +1773,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         )
 
         state["pending_task"] = None
-
         state_snapshot = copy.deepcopy(state)
 
         background_tasks.add_task(
@@ -1860,7 +1786,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         return JSONResponse(make_response("Поняла. Ищу варианты в магазинах и отправлю в Телеграм."))
 
-    # Режимы.
     if text in ["какой режим", "какой сейчас режим", "текущий режим"]:
         mode_name = state.get("mode", "обычный")
         title = MODES.get(mode_name, MODES["обычный"])["title"]
@@ -1884,7 +1809,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         return JSONResponse(make_response(f"{title} включён."))
 
-    # Сохранение Telegram-контакта.
     if text.startswith("запомни телеграм") or text.startswith("запомни telegram"):
         result = save_telegram_contact_from_command(command)
 
@@ -1896,7 +1820,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response("Не смогла распознать Telegram chat id."))
 
-    # Сохранение телефонного контакта.
     if text.startswith("запомни телефон") or text.startswith("запомни номер"):
         result = save_contact_from_command(command)
 
@@ -1908,13 +1831,11 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response("Не смогла распознать номер."))
 
-    # Запрос на звонок.
     if is_phone_call_request(command):
         answer = await handle_call_request(command)
         save_state(session_id, state)
         return JSONResponse(make_response(answer))
 
-    # Запомнить факт.
     if text.startswith("запомни"):
         fact = extract_fact(command)
 
@@ -1931,14 +1852,12 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response(f"Запомнила: {fact}."))
 
-    # Автозапоминание имени.
     remembered_name = try_auto_remember_name(command, state)
 
     if remembered_name:
         save_state(session_id, state)
         return JSONResponse(make_response(f"Приятно познакомиться, {remembered_name}."))
 
-    # Что помнишь.
     if text in [
         "что ты помнишь",
         "что ты обо мне помнишь",
@@ -1966,7 +1885,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response(result))
 
-    # Очистка памяти текущей сессии.
     if text in ["очисти память", "сотри память", "забудь все", "забудь всё"]:
         state["facts"] = []
         state["history"] = []
@@ -1978,7 +1896,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response("Память очищена."))
 
-    # Список покупок.
     added_items = add_to_shopping_list(command, state)
 
     if added_items:
@@ -2001,7 +1918,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response("Список покупок очищен."))
 
-    # Отправка списка покупок в Telegram.
     if "список покупок" in text and wants_telegram(command):
         items = state.get("shopping_list", [])
 
@@ -2023,7 +1939,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         else:
             return JSONResponse(make_response("Не получилось отправить в Телеграм."))
 
-    # Скинуть последний результат в Telegram.
     if text in [
         "скинь на телефон",
         "отправь в телеграм",
@@ -2048,8 +1963,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         else:
             return JSONResponse(make_response("Телеграм не настроен или не ответил."))
 
-    # Уточняющие вопросы для покупок.
-    # Важно: спрашиваем через колонку, а не пишем в Telegram.
     clarification = shopping_needs_clarification(command)
 
     if clarification:
@@ -2061,8 +1974,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
         save_state(session_id, state)
         return JSONResponse(make_response(clarification))
 
-    # Если пользователь просит Telegram/файл/покупку/длинный поиск — запускаем задачу в фоне.
-    # Так колонка не ждёт долго и не падает по таймауту.
     if wants_telegram(command) or wants_file(command) or is_order_request(command):
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
             save_state(session_id, state)
@@ -2087,10 +1998,8 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         return JSONResponse(make_response("Сделаю и отправлю в Телеграм."))
 
-    # Интернет-поиск без Telegram.
     if needs_web(command):
         query = extract_search_query(command)
-
         internet_context = ""
 
         if is_map_request(command):
@@ -2099,19 +2008,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
                 f"Ссылки на карты:\n"
                 f"Яндекс.Карты: {yandex}\n"
                 f"Google Maps: {google}\n\n"
-            )
-
-        if is_order_request(command):
-            order_links = make_order_links(query)
-            internet_context += (
-                "Ссылки для самостоятельной проверки и оформления заказа:\n"
-            )
-
-            for title, url in order_links:
-                internet_context += f"{title}: {url}\n"
-
-            internet_context += (
-                "\nВажно: не оформляй и не оплачивай заказ автоматически.\n\n"
             )
 
         search = await web_search(query, max_results=4)
@@ -2138,7 +2034,6 @@ async def alice_webhook(request: Request, background_tasks: BackgroundTasks):
 
         return JSONResponse(make_response(answer))
 
-    # Обычный вопрос к DeepSeek.
     try:
         answer, state = await ask_deepseek(command, state)
         state["last_result"] = answer
